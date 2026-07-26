@@ -1,0 +1,18 @@
+export type Minor = bigint;
+export const money = (minor: number | string | bigint): Minor => BigInt(minor);
+export const add = (...values: Minor[]) => values.reduce((sum, value) => sum + value, 0n);
+export const subtract = (left: Minor, right: Minor) => left - right;
+export const multiplyRate = (amount: Minor, basisPoints: bigint) => (amount * basisPoints + 5000n) / 10000n;
+export const expectedCash = (openingFloat:Minor,cashSales:Minor,refunds:Minor,paidOuts:Minor,safeDrops:Minor) => openingFloat+cashSales-refunds-paidOuts-safeDrops;
+export const actualCash = (denominations: { valueMinor: Minor; quantity: bigint }[]) => denominations.reduce((s,d)=>s+d.valueMinor*d.quantity,0n);
+export const closeDifference = (accounted:Minor,expected:Minor)=>accounted-expected;
+export const netFromGross = (gross:Minor,vatBasisPoints:bigint)=> (gross*10000n + (10000n+vatBasisPoints)/2n)/(10000n+vatBasisPoints);
+export const grossProfit = (netRevenue:Minor,directCost:Minor)=>netRevenue-directCost;
+export const marginBasisPoints = (profit:Minor,netRevenue:Minor)=>netRevenue===0n?0n:(profit*10000n)/netRevenue;
+export const eventContribution = (netRevenue:Minor,...directCosts:Minor[])=>netRevenue-add(...directCosts);
+export const personnelPercentage = (personnel:Minor,netRevenue:Minor)=>marginBasisPoints(personnel,netRevenue);
+export const payoutTiered = (revenue:Minor,tiers:{from:Minor;to?:Minor;rateBps:bigint}[])=>tiers.reduce((p,t)=>{const upper=t.to??revenue;if(revenue<=t.from)return p;const band=(revenue<upper?revenue:upper)-t.from;return p+multiplyRate(band,t.rateBps)},0n);
+export const bottleYield = (volumeMl:bigint,portionMl:bigint)=>portionMl<=0n?0n:volumeMl/portionMl;
+export const costPerServing = (packageCost:Minor,yieldCount:bigint)=>yieldCount<=0n?0n:(packageCost+yieldCount/2n)/yieldCount;
+export const breakEvenRevenue = (fixedCosts:Minor,contributionMarginBps:bigint)=>contributionMarginBps<=0n?0n:(fixedCosts*10000n+contributionMarginBps-1n)/contributionMarginBps;
+export const perUnit = (amount:Minor,units:bigint)=>units<=0n?0n:(amount+units/2n)/units;
