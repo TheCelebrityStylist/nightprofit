@@ -6,7 +6,7 @@ Primary risks are cross-tenant reads, role escalation, forged financial mutation
 
 ## Controls
 
-Every tenant record carries `organisation_id`; venue records also carry `venue_id`. Server authorization must resolve membership and role for every request. Viewer writes and manager billing access are denied. Immutable close snapshots and append-only audit events protect history. Files are MIME/size validated, hash deduplicated, filename-sanitised and stored privately in R2. Downloads use short-lived signed access.
+Every tenant record carries `organisation_id`; venue records also carry `venue_id`. Composite foreign keys prevent cross-tenant parent references. Server authorization resolves membership, explicit capability and venue assignment for every request. RLS and protected database functions enforce the same boundary. Viewer writes and manager billing access are denied. Immutable close snapshots and append-only audit events protect history. Files are stored in private Supabase Storage buckets with organisation-scoped policies; upload services must also enforce MIME, size, hashing and filename sanitisation before their workflows are considered complete.
 
 Secrets remain server-only and are validated at startup. Webhooks require signatures and unique event IDs. Scheduled jobs require `CRON_SECRET`, bounded retries and idempotency. Errors return correlation IDs rather than stacks. Logs redact document bodies, tokens and personal data.
 
@@ -16,4 +16,4 @@ GDPR controls include export/deletion requests, retention configuration, no opti
 
 ## Verification
 
-Review queries for organisation predicates, mutation role checks, private object paths, snapshot immutability, audit write-only access, webhook replay handling, upload bounds and log redaction. Run dependency audit and `npm run verify` for every release.
+Review queries for organisation predicates, capability checks, private object paths, snapshot immutability, audit write-only access, webhook replay handling, upload bounds and log redaction. Run dependency audit and `npm run verify` for every release. Local build verification is not a substitute for the remote multi-identity RLS and Storage suite.
