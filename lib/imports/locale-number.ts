@@ -1,7 +1,8 @@
 export function parseLocaleNumber(value:string, locale:"nl-NL"|"en-US"){
   const trimmed=value.trim().replace(/\s/g,"");if(!trimmed)throw new Error("EMPTY_NUMBER");
   const normalised=locale==="nl-NL"?trimmed.replace(/\./g,"").replace(",","."):trimmed.replace(/,/g,"");
-  if(!/^-?\d+(\.\d+)?$/.test(normalised))throw new Error("INVALID_NUMBER");
+  if(!/^-?\d+(\.\d{1,2})?$/.test(normalised))throw new Error("INVALID_NUMBER");
+  if(normalised.replace(/[-.]/g,"").length>15)throw new Error("UNSAFE_NUMBER");
   return normalised;
 }
 export function decimalToMinor(value:string,locale:"nl-NL"|"en-US"){

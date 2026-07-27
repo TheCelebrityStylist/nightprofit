@@ -2,6 +2,7 @@ import {describe,expect,it} from "vitest";
 import {closeDifference,eventContribution,menuItemCost,marginChangeBasisPoints,netFromGross,payoutTiered,breakEvenRevenue,bottleYield} from "../lib/calculations";
 import {decimalToMinor} from "../lib/imports/locale-number";
 import {briefingSchema,deterministicBriefing} from "../lib/briefing/deterministic";
+import {venueTradingDate} from "../lib/trading-date";
 const id="11111111-1111-4111-8111-111111111111";
 describe("production financial fixtures",()=>{
   it("cash shortage",()=>expect(closeDifference(9950n,10000n)).toBe(-50n));
@@ -18,4 +19,8 @@ describe("production financial fixtures",()=>{
   it("calculates break-even",()=>expect(breakEvenRevenue(300000n,6000n)).toBe(500000n));
   it("generates deterministic briefing without invented metrics",()=>{const result=deterministicBriefing({id,generatedAt:"2026-07-27T00:00:00.000Z",metrics:{net_revenue_minor:100000,close_difference_minor:-500},evidenceIds:[id],incomplete:["Attendance ontbreekt."]});expect(result.model).toBeNull();expect(JSON.stringify(result)).not.toContain("personeel")});
   it("rejects unsupported AI schema",()=>expect(()=>briefingSchema.parse({headline:"x"})).toThrow());
+  it("rejects more than two decimal places",()=>expect(()=>decimalToMinor("12,345","nl-NL")).toThrow("INVALID_NUMBER"));
+  it("rejects unsafe money input",()=>expect(()=>decimalToMinor("9999999999999999,99","nl-NL")).toThrow("UNSAFE_NUMBER"));
+  it("uses venue cutoff before the DST spring transition",()=>expect(venueTradingDate("2026-03-29T02:30:00Z","Europe/Amsterdam",6)).toBe("2026-03-28"));
+  it("uses venue cutoff after the DST autumn transition",()=>expect(venueTradingDate("2026-10-25T05:30:00Z","Europe/Amsterdam",6)).toBe("2026-10-25"));
 });

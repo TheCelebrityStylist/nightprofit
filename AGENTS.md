@@ -4,14 +4,14 @@
 
 - `app/`: public site, synthetic demo and product workflows.
 - `lib/calculations.ts`: pure financial truth; integer minor units only.
-- `db/schema.ts`: tenant-owned D1 persistence model.
-- `drizzle/`: generated, reviewed migrations.
+- `supabase/migrations/`: reviewed PostgreSQL, RLS and Storage migrations.
+- `lib/supabase/`: authenticated PostgreSQL and Storage access boundaries.
 - `docs/`: product, architecture, calculation and security decisions.
 - `tests/`: deterministic calculation and rendered-route checks.
 
 ## Commands
 
-`npm run dev`, `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`, `npm run verify`, `npm run db:generate`.
+`npm run dev`, `npm run lint`, `npm run typecheck`, `npm test`, `npm run test:e2e`, `npm run build`, `npm run verify`, `npm run db:types`, `npm run db:push`.
 
 ## Non-negotiable constraints
 
