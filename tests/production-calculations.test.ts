@@ -1,0 +1,21 @@
+import {describe,expect,it} from "vitest";
+import {closeDifference,eventContribution,menuItemCost,marginChangeBasisPoints,netFromGross,payoutTiered,breakEvenRevenue,bottleYield} from "../lib/calculations";
+import {decimalToMinor} from "../lib/imports/locale-number";
+import {briefingSchema,deterministicBriefing} from "../lib/briefing/deterministic";
+const id="11111111-1111-4111-8111-111111111111";
+describe("production financial fixtures",()=>{
+  it("cash shortage",()=>expect(closeDifference(9950n,10000n)).toBe(-50n));
+  it("cash surplus",()=>expect(closeDifference(10050n,10000n)).toBe(50n));
+  it("card mismatch",()=>expect(closeDifference(1245620n,1250480n)).toBe(-4860n));
+  it("parses Dutch decimal CSV",()=>expect(decimalToMinor("1.234,56","nl-NL")).toBe(123456n));
+  it("parses English decimal CSV",()=>expect(decimalToMinor("1,234.56","en-US")).toBe(123456n));
+  it("handles VAT inclusive",()=>expect(netFromGross(12100n,2100n)).toBe(10000n));
+  it("handles progressive payout tiers",()=>expect(payoutTiered(1200000n,[{from:0n,to:500000n,rateBps:1000n},{from:500000n,to:1000000n,rateBps:1500n},{from:1000000n,rateBps:2000n}])).toBe(165000n));
+  it("floors bottle yield",()=>expect(bottleYield(700n,40n)).toBe(17n));
+  it("costs a multi-component cocktail",()=>expect(menuItemCost([{costMinor:3400n,quantityNumerator:40n,quantityDenominator:700n},{costMinor:220n,quantityNumerator:1n,quantityDenominator:1n},{costMinor:20n,quantityNumerator:1n,quantityDenominator:1n}])).toBe(434n));
+  it("calculates supplier price margin movement",()=>expect(marginChangeBasisPoints(1000n,250n,300n)).toBe(-500n));
+  it("preserves event contribution terminology",()=>expect(eventContribution(100000n,25000n,20000n,10000n)).toBe(45000n));
+  it("calculates break-even",()=>expect(breakEvenRevenue(300000n,6000n)).toBe(500000n));
+  it("generates deterministic briefing without invented metrics",()=>{const result=deterministicBriefing({id,generatedAt:"2026-07-27T00:00:00.000Z",metrics:{net_revenue_minor:100000,close_difference_minor:-500},evidenceIds:[id],incomplete:["Attendance ontbreekt."]});expect(result.model).toBeNull();expect(JSON.stringify(result)).not.toContain("personeel")});
+  it("rejects unsupported AI schema",()=>expect(()=>briefingSchema.parse({headline:"x"})).toThrow());
+});

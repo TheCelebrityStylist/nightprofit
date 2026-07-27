@@ -1,0 +1,10 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import { requireMembership } from "../../../../lib/auth/require-membership";
+import { priceFor, stripeClient } from "../../../../lib/stripe/server";
+const schema=z.object({organisationId:z.uuid(),plan:z.enum(["diagnostic","essential_monthly","essential_annual","pro_monthly","pro_annual"]),venueQuantity:z.number().int().min(1).max(100).default(1)});
+export async function POST(request:Request){
+  try{const input=schema.parse(await request.json());const {supabase}=await requireMembership(input.organisationId,"billing:manage");const {data:org}=await supabase.from("organisations").select("name,stripe_customer_id").eq("id",input.organisationId).single();if(!org)throw new Error("FORBIDDEN");const stripe=stripeClient();let customer=org.stripe_customer_id;if(!customer){const created=await stripe.customers.create({name:org.name,metadata:{organisation_id:input.organisationId}},{idempotencyKey:`org-customer-${input.organisationId}`});customer=created.id;await supabase.from("organisations").update({stripe_customer_id:customer}).eq("id",input.organisationId)}
+    const recurring=input.plan!=="diagnostic";const origin=new URL(request.url).origin;const session=await stripe.checkout.sessions.create({mode:recurring?"subscription":"payment",customer,line_items:[{price:priceFor(input.plan),quantity:recurring?input.venueQuantity:1}],success_url:`${origin}/app/settings/billing?checkout=success`,cancel_url:`${origin}/app/settings/billing?checkout=cancelled`,client_reference_id:input.organisationId,metadata:{organisation_id:input.organisationId,plan:input.plan},subscription_data:recurring?{metadata:{organisation_id:input.organisationId,plan:input.plan}}:undefined},{idempotencyKey:`checkout-${input.organisationId}-${input.plan}-${input.venueQuantity}-${Math.floor(Date.now()/300000)}`});return NextResponse.json({url:session.url});}
+  catch(error){const code=error instanceof Error?error.message:"UNKNOWN";return NextResponse.json({error:code==="FORBIDDEN"?"Geen toegang tot facturatie.":"Checkout kon niet worden gestart."},{status:code==="FORBIDDEN"?403:400})}
+}

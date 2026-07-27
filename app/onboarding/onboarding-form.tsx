@@ -1,0 +1,8 @@
+"use client";
+import { useState, type FormEvent } from "react";
+import Link from "next/link";
+export function OnboardingForm(){
+  const [message,setMessage]=useState("");const [busy,setBusy]=useState(false);
+  async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();setBusy(true);const result=await fetch("/api/onboarding",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(Object.fromEntries(new FormData(e.currentTarget)))});const body=await result.json() as {error?:string;redirect?:string};setBusy(false);if(body.redirect)window.location.assign(body.redirect);else setMessage(body.error??"Opslaan mislukt.");}
+  return <main className="auth-page"><Link href="/" className="brand"><span className="logo">N</span><b>NightProfit</b></Link><section className="auth-card onboarding-card"><span className="eyebrow">ONBOARDING · STAP 1 EN 2</span><h1>Je eerste organisatie</h1><p>Deze gegevens worden direct opgeslagen. Je kunt de verdere configuratie later hervatten.</p><form onSubmit={submit}><label>Organisatienaam<input name="organisationName" required minLength={2}/></label><label>Eerste vestiging<input name="venueName" required minLength={2}/></label><label>Type<select name="venueType" defaultValue="nightclub"><option value="nightclub">Nachtclub</option><option value="bar">Bar</option><option value="event_venue">Eventlocatie</option></select></label><label>Tijdzone<select name="timezone" defaultValue="Europe/Amsterdam"><option>Europe/Amsterdam</option><option>Europe/Brussels</option></select></label><button className="primary" disabled={busy}>{busy?"Opslaan…":"Organisatie aanmaken"}</button>{message&&<div className="form-message" role="alert">{message}</div>}</form></section></main>
+}

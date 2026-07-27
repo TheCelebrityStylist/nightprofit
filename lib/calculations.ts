@@ -16,3 +16,6 @@ export const bottleYield = (volumeMl:bigint,portionMl:bigint)=>portionMl<=0n?0n:
 export const costPerServing = (packageCost:Minor,yieldCount:bigint)=>yieldCount<=0n?0n:(packageCost+yieldCount/2n)/yieldCount;
 export const breakEvenRevenue = (fixedCosts:Minor,contributionMarginBps:bigint)=>contributionMarginBps<=0n?0n:(fixedCosts*10000n+contributionMarginBps-1n)/contributionMarginBps;
 export const perUnit = (amount:Minor,units:bigint)=>units<=0n?0n:(amount+units/2n)/units;
+export const menuItemCost = (components:{costMinor:Minor;quantityNumerator:bigint;quantityDenominator:bigint;wasteBps?:bigint}[]) =>
+  components.reduce((sum,c)=>sum+multiplyRate((c.costMinor*c.quantityNumerator+c.quantityDenominator/2n)/c.quantityDenominator,10000n+(c.wasteBps??0n)),0n);
+export const marginChangeBasisPoints=(sellingNet:Minor,previousCost:Minor,currentCost:Minor)=>marginBasisPoints(grossProfit(sellingNet,currentCost),sellingNet)-marginBasisPoints(grossProfit(sellingNet,previousCost),sellingNet);
