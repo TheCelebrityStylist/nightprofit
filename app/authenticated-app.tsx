@@ -8,9 +8,9 @@ import { WorkflowForm } from "./workflow-form";
 import "./real-app.css";
 
 const navigation = [
-  ["Command Center", "/app/dashboard"], ["Nightly Close", "/app/close"],
-  ["Group Bookings", "/app/bookings"], ["Suppliers & Contracts", "/app/suppliers"],
-  ["Event Yield", "/app/yield"], ["Team & Compliance", "/app/compliance"],
+  ["Vandaag", "/app/dashboard"], ["Plan & Rooster", "/app/planning"], ["Nightly Close", "/app/close"],
+  ["Groepsboekingen", "/app/bookings"], ["Inkoop & Contracten", "/app/suppliers"],
+  ["Events & Yield", "/app/yield"], ["Team & Compliance", "/app/compliance"],
   ["Alerts & Actions", "/app/alerts"], ["Reports", "/app/reports"],
   ["Integrations", "/app/integrations"], ["Settings", "/app/settings"], ["Billing", "/app/billing"],
 ] as const;
@@ -23,6 +23,9 @@ type Staff = {id:string;full_name:string;role_name:string;onboarding_status:stri
 type Scenario = {id:string;venue_id:string;event_id:string;scenario:string;revenue_low_minor:string;contribution_minor:string;break_even_revenue_minor:string;missing_data:string[];created_at:string};
 type EventRow = {id:string;name:string;starts_at:string};
 type Incident = {id:string;venue_id:string;occurred_at:string;category:string;status:string;factual_record:string};
+type Forecast = {id:string;venue_id:string;interval_start:string;interval_end:string;expected_guests:number;expected_revenue_minor:string;source_basis:string[]};
+type Shift = {id:string;venue_id:string;staff_profile_id:string|null;role_name:string;starts_at:string;ends_at:string;break_minutes:number;hourly_cost_minor:string;status:string;source:string};
+type Availability = {id:string;staff_profile_id:string;starts_at:string;ends_at:string;availability:string;note:string|null};
 
 const euro = (minor:string|number|bigint|null|undefined) => new Intl.NumberFormat("nl-NL",{style:"currency",currency:"EUR"}).format(Number(BigInt(minor??0))/100);
 const date = (value:string) => new Intl.DateTimeFormat("nl-NL",{dateStyle:"medium"}).format(new Date(value));
@@ -55,6 +58,7 @@ export async function AuthenticatedApp({ path }: { path: string }) {
   else if (path === "/app/close/new") content = <section className="panel"><CloseForm organisationId={organisationId} venues={venues}/></section>;
   else if (path.startsWith("/app/close/")) content = await closeDetail(supabase, organisationId, path.split("/").at(-1) ?? "", venues);
   else if (path === "/app/bookings") content = await bookings(supabase, organisationId, venues);
+  else if (path === "/app/planning") content = await planning(supabase, organisationId, venues);
   else if (path === "/app/suppliers") content = await suppliers(supabase, organisationId);
   else if (path === "/app/yield") content = await eventYield(supabase, organisationId, venues);
   else if (path === "/app/compliance") content = await compliance(supabase, organisationId, venues);
@@ -71,7 +75,7 @@ export async function AuthenticatedApp({ path }: { path: string }) {
     <main className="app-main">
       <header className="topbar"><div><b>{organisation.name}</b><small>{venues.map((venue)=>venue.name).join(" · ")||"Nog geen vestiging"}</small></div><form action="/api/auth/logout" method="post"><button className="ghost">Uitloggen</button></form></header>
       <div className="content">
-        <section className="hero-row"><div><div className="eyebrow">LIVE · SUPABASE</div><h1>{activeLabel}</h1><p>Alle gegevens zijn beperkt tot je organisatie, rol en toegewezen vestigingen.</p></div>{path==="/app/close"&&<Link className="primary" href="/app/close/new">Nieuwe afsluiting</Link>}</section>
+        <section className="hero-row"><div><div className="eyebrow">NIGHTPROFIT CONTROL LOOP · LIVE</div><h1>{activeLabel}</h1><p>{path==="/app/dashboard"?"Van vraag naar bezetting, uitvoering en winst—met één geprioriteerde actielijst.":"Alle gegevens zijn beperkt tot je organisatie, rol en toegewezen vestigingen."}</p></div>{path==="/app/close"&&<Link className="primary" href="/app/close/new">Nieuwe afsluiting</Link>}</section>
         {content}
       </div>
     </main>
@@ -79,11 +83,16 @@ export async function AuthenticatedApp({ path }: { path: string }) {
 }
 
 async function dashboard(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>, organisationId:string, venues:Venue[], closes:Close[]) {
-  const [{data:deposits},{data:quotes},{data:discrepancies},{data:policies}] = await Promise.all([
+  const today=new Date().toISOString().slice(0,10);
+  const tomorrow=new Date(Date.now()+86400000).toISOString().slice(0,10);
+  const [{data:deposits},{data:quotes},{data:discrepancies},{data:policies},{data:forecasts},{data:shifts},{data:inquiries}] = await Promise.all([
     supabase.from("booking_deposits").select("id,status,amount_minor").eq("organisation_id",organisationId).in("status",["created","pending","failed"]),
     supabase.from("booking_quotes").select("id,expires_at,status").eq("organisation_id",organisationId).in("status",["approved","sent"]),
     supabase.from("contract_discrepancies").select("id,status,financial_impact_minor").eq("organisation_id",organisationId).in("status",["open","reviewing","disputed"]),
     supabase.from("compliance_policies").select("id,expires_at").eq("organisation_id",organisationId),
+    supabase.from("demand_forecasts").select("id,expected_guests,expected_revenue_minor").eq("organisation_id",organisationId).gte("trading_date",today).lte("trading_date",tomorrow),
+    supabase.from("staff_shifts").select("id,starts_at,ends_at,break_minutes,hourly_cost_minor,status,staff_profile_id").eq("organisation_id",organisationId).gte("starts_at",`${today}T00:00:00`).lt("starts_at",`${tomorrow}T23:59:59`),
+    supabase.from("booking_inquiries").select("id,status,preferred_start,group_size").eq("organisation_id",organisationId).in("status",["new","qualified","quoted"]),
   ]);
   const unexplained = closes.filter(close=>BigInt(close.difference_minor)!==0n);
   const unapproved = closes.filter(close=>["draft","reopened","submitted"].includes(close.status));
@@ -92,19 +101,35 @@ async function dashboard(supabase:Awaited<ReturnType<typeof createSupabaseServer
   const soon = Date.now()+14*86400000;
   const expiringQuotes = ((quotes??[]) as unknown as {id:string;expires_at:string}[]).filter(row=>new Date(row.expires_at).getTime()<soon);
   const expiringPolicies = ((policies??[]) as unknown as {id:string;expires_at:string|null}[]).filter(row=>row.expires_at&&new Date(row.expires_at).getTime()<soon);
+  const forecastRows=(forecasts??[]) as unknown as {id:string;expected_guests:number;expected_revenue_minor:string}[];
+  const shiftRows=(shifts??[]) as unknown as {id:string;starts_at:string;ends_at:string;break_minutes:number;hourly_cost_minor:string;status:string;staff_profile_id:string|null}[];
+  const inquiryRows=(inquiries??[]) as unknown as {id:string;status:string;preferred_start:string;group_size:number}[];
+  const expectedRevenue=forecastRows.reduce((sum,row)=>sum+BigInt(row.expected_revenue_minor),0n);
+  const laborCost=shiftRows.reduce((sum,row)=>{
+    const minutes=Math.max(0,(new Date(row.ends_at).getTime()-new Date(row.starts_at).getTime())/60000-row.break_minutes);
+    return sum+(BigInt(row.hourly_cost_minor)*BigInt(Math.round(minutes)))/60n;
+  },0n);
+  const laborBp=expectedRevenue>0n?Number((laborCost*10000n)/expectedRevenue):0;
+  const openShifts=shiftRows.filter(row=>!row.staff_profile_id||row.status==="open");
   return <>
+    <section className="control-brief">
+      <div><span className="ai-badge">CONTROL BRIEF · REGELGESTUURD</span><h2>{openShifts.length?`${openShifts.length} dienst(en) nog onbezet vóór publicatie.`:"De huidige bezetting heeft geen zichtbare open diensten."}</h2><p>{forecastRows.length?`${forecastRows.reduce((sum,row)=>sum+row.expected_guests,0)} gasten verwacht · ${euro(expectedRevenue)} omzet · geplande loonkosten ${euro(laborCost)}.`:"Voeg een vraagverwachting toe om omzet, bezetting en loonkosten in één besluit te verbinden."}</p></div>
+      <div className="control-score"><span>Loonquote</span><strong>{(laborBp/100).toLocaleString("nl-NL",{maximumFractionDigits:1})}%</strong><small>{expectedRevenue>0n?"op verwachte omzet":"wacht op forecast"}</small></div>
+    </section>
+    <section className="loop-strip" aria-label="Operationele control loop"><Link href="/app/bookings">01 Vraag<small>{inquiryRows.length} open aanvragen</small></Link><Link href="/app/planning">02 Plan<small>{forecastRows.length} forecastblokken</small></Link><Link href="/app/planning">03 Bezet<small>{openShifts.length} open diensten</small></Link><Link href="/app/suppliers">04 Koop<small>{discrepancyRows.length} afwijkingen</small></Link><Link href="/app/close">05 Sluit<small>{unapproved.length} te beoordelen</small></Link></section>
     <section className="metric-grid">
-      <Metric href="/app/close" label="Onverklaard closeverschil" value={euro(unexplained.reduce((sum,row)=>sum+BigInt(row.difference_minor),0n))} detail={`${unexplained.length} afsluiting(en)`}/>
-      <Metric href="/app/close" label="Niet goedgekeurd" value={String(unapproved.length)} detail="Concept, heropend of ingediend"/>
+      <Metric href="/app/planning" label="Verwachte omzet" value={euro(expectedRevenue)} detail={`${forecastRows.length} vraagblok(ken)`}/>
+      <Metric href="/app/planning" label="Geplande loonkosten" value={euro(laborCost)} detail={`${shiftRows.length} dienst(en)`}/>
+      <Metric href="/app/close" label="Onverklaard verschil" value={euro(unexplained.reduce((sum,row)=>sum+BigInt(row.difference_minor),0n))} detail={`${unexplained.length} afsluiting(en)`}/>
       <Metric href="/app/bookings" label="Openstaande deposito's" value={euro(depositRows.reduce((sum,row)=>sum+BigInt(row.amount_minor),0n))} detail={`${depositRows.length} actie(s)`}/>
-      <Metric href="/app/bookings" label="Offertes verlopen binnenkort" value={String(expiringQuotes.length)} detail="Binnen veertien dagen"/>
       <Metric href="/app/suppliers" label="Open afwijkingen" value={String(discrepancyRows.length)} detail={euro(discrepancyRows.reduce((sum,row)=>sum+BigInt(row.financial_impact_minor),0n))}/>
-      <Metric href="/app/compliance" label="Beleid verloopt binnenkort" value={String(expiringPolicies.length)} detail="Controleer vervanging en toewijzing"/>
+      <Metric href="/app/compliance" label="Deadlines" value={String(expiringQuotes.length+expiringPolicies.length)} detail="Offertes en beleid binnen 14 dagen"/>
     </section>
     <section className="panel"><header><div><h3>Actiewachtrij</h3><p>Rechtstreeks afgeleid van records die aandacht vereisen.</p></div></header>
       {!unapproved.length&&!depositRows.length&&!discrepancyRows.length?<div className="empty-state"><h3>Geen open acties</h3><p>Voeg echte operationele records toe via de modules om de wachtrij te vullen.</p></div>:
       <div className="record-list">
-        {unapproved.slice(0,5).map(row=><Link key={row.id} href={`/app/close/${row.id}`}><b>Close {row.trading_date}</b><span>{row.status} · {venues.find(v=>v.id===row.venue_id)?.name}</span><em>Open →</em></Link>)}
+        {openShifts.slice(0,3).map(row=><Link key={row.id} href="/app/planning"><b>Vul open dienst</b><span>{new Intl.DateTimeFormat("nl-NL",{weekday:"short",hour:"2-digit",minute:"2-digit"}).format(new Date(row.starts_at))}</span><em>Plan →</em></Link>)}
+        {unapproved.slice(0,4).map(row=><Link key={row.id} href={`/app/close/${row.id}`}><b>Close {row.trading_date}</b><span>{row.status} · {venues.find(v=>v.id===row.venue_id)?.name}</span><em>Controleer →</em></Link>)}
         {depositRows.slice(0,3).map(row=><Link key={row.id} href="/app/bookings"><b>Boekingsdeposito</b><span>{row.status} · {euro(row.amount_minor)}</span><em>Open →</em></Link>)}
       </div>}
     </section>
@@ -114,6 +139,68 @@ async function dashboard(supabase:Awaited<ReturnType<typeof createSupabaseServer
 function Metric({href,label,value,detail}:{href:string;label:string;value:string;detail:string}) { return <Link href={href} className="metric"><span>{label}</span><strong>{value}</strong><small>{detail} →</small></Link>; }
 
 function closeList(venues:Venue[], closes:Close[]) { return <section className="panel"><header><div><h3>Afsluitingen</h3><p>Nieuwste handelsdatum eerst. Open een record voor bedragen, bewijs en status.</p></div></header>{!closes.length?<div className="empty-state"><h3>Nog geen afsluitingen</h3><p>Start met de eerste handelsdatum; bedragen worden server-side als gehele centen verwerkt.</p><Link className="primary" href="/app/close/new">Eerste afsluiting</Link></div>:<div className="record-list">{closes.map(close=><Link key={close.id} href={`/app/close/${close.id}`}><b>{close.trading_date} · v{close.version}</b><span>{venues.find(v=>v.id===close.venue_id)?.name} · {close.status}</span><em>{euro(close.difference_minor)} →</em></Link>)}</div>}</section>; }
+
+async function planning(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>, organisationId:string, venues:Venue[]) {
+  const start=new Date(); start.setHours(0,0,0,0);
+  const end=new Date(start); end.setDate(end.getDate()+14);
+  const [{data:forecastData},{data:shiftData},{data:staffData},{data:availabilityData}]=await Promise.all([
+    supabase.from("demand_forecasts").select("id,venue_id,interval_start,interval_end,expected_guests,expected_revenue_minor,source_basis").eq("organisation_id",organisationId).gte("interval_start",start.toISOString()).lt("interval_start",end.toISOString()).order("interval_start"),
+    supabase.from("staff_shifts").select("id,venue_id,staff_profile_id,role_name,starts_at,ends_at,break_minutes,hourly_cost_minor,status,source").eq("organisation_id",organisationId).gte("starts_at",start.toISOString()).lt("starts_at",end.toISOString()).order("starts_at"),
+    supabase.from("staff_profiles").select("id,full_name,role_name,onboarding_status,preferred_language").eq("organisation_id",organisationId).order("full_name"),
+    supabase.from("staff_availability").select("id,staff_profile_id,starts_at,ends_at,availability,note").eq("organisation_id",organisationId).gte("ends_at",start.toISOString()).lt("starts_at",end.toISOString()).order("starts_at"),
+  ]);
+  const forecasts=(forecastData??[]) as unknown as Forecast[];
+  const shifts=(shiftData??[]) as unknown as Shift[];
+  const staff=(staffData??[]) as Staff[];
+  const availability=(availabilityData??[]) as unknown as Availability[];
+  const staffOptions=staff.map(row=>({label:`${row.full_name} · ${row.role_name}`,value:row.id}));
+  const totalRevenue=forecasts.reduce((sum,row)=>sum+BigInt(row.expected_revenue_minor),0n);
+  const totalLabor=shifts.reduce((sum,row)=>{
+    const minutes=Math.max(0,(new Date(row.ends_at).getTime()-new Date(row.starts_at).getTime())/60000-row.break_minutes);
+    return sum+(BigInt(row.hourly_cost_minor)*BigInt(Math.round(minutes)))/60n;
+  },0n);
+  const open=shifts.filter(row=>!row.staff_profile_id||row.status==="open");
+  const dayKeys=Array.from(new Set([...forecasts.map(row=>row.interval_start.slice(0,10)),...shifts.map(row=>row.starts_at.slice(0,10))])).slice(0,7);
+  return <div className="workflow-stack">
+    <section className="planner-summary">
+      <div><span>Verwachte omzet</span><strong>{euro(totalRevenue)}</strong><small>{forecasts.reduce((sum,row)=>sum+row.expected_guests,0)} gasten · 14 dagen</small></div>
+      <div><span>Geplande loonkosten</span><strong>{euro(totalLabor)}</strong><small>{totalRevenue?`${Number(totalLabor*10000n/totalRevenue)/100}% van omzet`:"forecast vereist"}</small></div>
+      <div><span>Bezettingsrisico</span><strong>{open.length}</strong><small>open dienst(en)</small></div>
+      <div><span>Beschikbaarheid</span><strong>{availability.length}</strong><small>reacties in venster</small></div>
+    </section>
+    <section className="panel plan-board"><header><div><h3>Geïntegreerd planbord</h3><p>Vraag, bezetting en loonkosten per handelsdag. Concepten blijven herkenbaar totdat een manager publiceert.</p></div><span className="ai-badge">AI-READY · MENS KEURT GOED</span></header>
+      {!dayKeys.length?<div className="empty-state"><h3>Bouw het eerste winstplan</h3><p>Leg eerst verwachte gasten en omzet vast. Plan daarna alleen de uren die de vraag nodig heeft.</p></div>:
+      <div className="day-grid">{dayKeys.map(day=>{
+        const dayForecasts=forecasts.filter(row=>row.interval_start.startsWith(day));
+        const dayShifts=shifts.filter(row=>row.starts_at.startsWith(day));
+        const revenue=dayForecasts.reduce((sum,row)=>sum+BigInt(row.expected_revenue_minor),0n);
+        return <article key={day}><header><div><b>{new Intl.DateTimeFormat("nl-NL",{weekday:"short",day:"numeric",month:"short"}).format(new Date(`${day}T12:00:00`))}</b><small>{dayForecasts.reduce((sum,row)=>sum+row.expected_guests,0)} gasten · {euro(revenue)}</small></div><em>{dayShifts.length} diensten</em></header>
+          <div className="shift-stack">{dayShifts.length?dayShifts.map(shift=><div key={shift.id} className={shift.staff_profile_id?"shift":"shift open"}><span>{new Intl.DateTimeFormat("nl-NL",{hour:"2-digit",minute:"2-digit"}).format(new Date(shift.starts_at))}</span><div><b>{shift.role_name}</b><small>{staff.find(row=>row.id===shift.staff_profile_id)?.full_name||"Open dienst"} · {shift.status}</small></div></div>):<small className="no-shifts">Nog geen bezetting</small>}</div>
+        </article>;
+      })}</div>}
+    </section>
+    <div className="planning-forms">
+      <WorkflowForm organisationId={organisationId} workflow="demand_forecast" title="1. Vraag voorspellen" submitLabel="Forecast toevoegen" fields={[
+        {name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues)},{name:"startsAt",label:"Start vraagblok",type:"datetime-local",required:true},
+        {name:"endsAt",label:"Einde vraagblok",type:"datetime-local",required:true},{name:"expectedGuests",label:"Verwachte gasten",type:"number",required:true},
+        {name:"expectedRevenue",label:"Verwachte omzet (€)",required:true},{name:"sourceBasis",label:"Bronnen",required:true,placeholder:"Reserveringen, historie, event, weer"},
+      ]}/>
+      <WorkflowForm organisationId={organisationId} workflow="staff_shift" title="2. Dienst plannen" submitLabel="Dienst toevoegen" fields={[
+        {name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues)},{name:"staffProfileId",label:"Medewerker (leeg = open)",type:"select",options:staffOptions},
+        {name:"roleName",label:"Rol",required:true},{name:"startsAt",label:"Start dienst",type:"datetime-local",required:true},{name:"endsAt",label:"Einde dienst",type:"datetime-local",required:true},
+        {name:"breakMinutes",label:"Pauze (min)",type:"number",required:true},{name:"hourlyCost",label:"Uurkost (€)",required:true},
+        {name:"status",label:"Status",type:"select",required:true,options:[{label:"Concept",value:"draft"},{label:"Open dienst",value:"open"},{label:"Publiceren",value:"published"}]},
+      ]}/>
+      <WorkflowForm organisationId={organisationId} workflow="availability" title="3. Beschikbaarheid verwerken" submitLabel="Beschikbaarheid opslaan" fields={[
+        {name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues)},{name:"staffProfileId",label:"Medewerker",type:"select",required:true,options:staffOptions},
+        {name:"startsAt",label:"Vanaf",type:"datetime-local",required:true},{name:"endsAt",label:"Tot",type:"datetime-local",required:true},
+        {name:"availability",label:"Reactie",type:"select",required:true,options:[{label:"Beschikbaar",value:"available"},{label:"Voorkeur",value:"preferred"},{label:"Niet beschikbaar",value:"unavailable"}]},
+        {name:"note",label:"Notitie",placeholder:"Reden of voorkeur"},
+      ]}/>
+    </div>
+    <section className="panel"><header><div><h3>WhatsApp-operatie</h3><p>De MaestroPlanner-kern, verbonden aan NightProfit: beschikbaarheid opvragen, open diensten vullen, ruilingen behandelen en het rooster delen.</p></div></header><div className="integration-steps"><div><b>01 Vraag op</b><span>Persoonlijke beschikbaarheidslink per periode</span></div><div><b>02 Optimaliseer</b><span>Vraag, vaardigheden, voorkeuren en loonkost als randvoorwaarden</span></div><div><b>03 Keur goed</b><span>Manager ziet conflicten en accepteert het voorstel</span></div><div><b>04 Deel</b><span>WhatsApp-bericht met dienst en bevestigingslink</span></div></div><div className="legal-note">WhatsApp-verzending vereist een goedgekeurde Business-provider en templates. NightProfit toont geen actieve koppeling totdat credentials en webhook aantoonbaar werken.</div></section>
+  </div>;
+}
 
 async function closeDetail(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>, organisationId:string, closeId:string, venues:Venue[]) {
   const [{data:close},{data:lines},{data:audit},{data:canApprove},{data:canReopen}] = await Promise.all([

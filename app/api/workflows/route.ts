@@ -5,7 +5,7 @@ import { decimalToMinor } from "../../../lib/imports/locale-number";
 import { add, breakEvenRevenue, eventContribution, marginBasisPoints, money } from "../../../lib/calculations";
 
 const envelope = z.object({
-  workflow: z.enum(["booking_inquiry", "supplier", "event_yield", "staff_profile", "incident"]),
+  workflow: z.enum(["booking_inquiry", "supplier", "event_yield", "staff_profile", "incident", "demand_forecast", "staff_shift", "availability"]),
   organisationId: z.string().uuid(),
   values: z.record(z.string(), z.string()),
 });
@@ -35,6 +35,22 @@ const incidentSchema = z.object({
   venueId: z.string().uuid(), occurredAt: z.iso.datetime({ local: true }),
   category: z.string().trim().min(2).max(80), factualRecord: z.string().trim().min(10).max(10000),
   witnesses: z.string().trim().max(1000).default(""), actions: z.string().trim().max(2000).default(""),
+});
+const forecastSchema = z.object({
+  venueId:z.string().uuid(), startsAt:z.iso.datetime({local:true}), endsAt:z.iso.datetime({local:true}),
+  expectedGuests:z.coerce.number().int().min(0).max(100000), expectedRevenue:z.string(),
+  sourceBasis:z.string().trim().min(2).max(500),
+});
+const shiftSchema = z.object({
+  venueId:z.string().uuid(), staffProfileId:z.union([z.string().uuid(),z.literal("")]).default(""),
+  roleName:z.string().trim().min(2).max(120), startsAt:z.iso.datetime({local:true}), endsAt:z.iso.datetime({local:true}),
+  breakMinutes:z.coerce.number().int().min(0).max(720), hourlyCost:z.string(),
+  status:z.enum(["draft","open","published"]),
+});
+const availabilitySchema = z.object({
+  venueId:z.string().uuid(), staffProfileId:z.string().uuid(),
+  startsAt:z.iso.datetime({local:true}), endsAt:z.iso.datetime({local:true}),
+  availability:z.enum(["available","unavailable","preferred"]), note:z.string().trim().max(500).default(""),
 });
 
 function iso(value:string) { return new Date(value).toISOString(); }
@@ -118,6 +134,47 @@ export async function POST(request: Request) {
       });
       if (error) throw error;
       return NextResponse.json({ message: "Beperkt medewerkersprofiel aangemaakt." }, { status: 201 });
+    }
+    if (input.workflow === "demand_forecast") {
+      const values=forecastSchema.parse(input.values);
+      if(new Date(values.endsAt)<=new Date(values.startsAt)) throw new Error("invalid_window");
+      const {supabase,user}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
+      const {error}=await supabase.from("demand_forecasts").insert({
+        organisation_id:input.organisationId,venue_id:values.venueId,
+        trading_date:values.startsAt.slice(0,10),interval_start:iso(values.startsAt),interval_end:iso(values.endsAt),
+        expected_guests:values.expectedGuests,expected_revenue_minor:minor(values.expectedRevenue).toString(),
+        confidence_basis_points:0,source_basis:values.sourceBasis.split(",").map(value=>value.trim()).filter(Boolean),
+        assumptions:{mode:"manager_input"},created_by:user.id,
+      });
+      if(error) throw error;
+      return NextResponse.json({message:"Vraagverwachting opgeslagen en gekoppeld aan de personeelsplanning."},{status:201});
+    }
+    if (input.workflow === "staff_shift") {
+      const values=shiftSchema.parse(input.values);
+      if(new Date(values.endsAt)<=new Date(values.startsAt)) throw new Error("invalid_window");
+      const {supabase,user}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
+      const {error}=await supabase.from("staff_shifts").insert({
+        organisation_id:input.organisationId,venue_id:values.venueId,
+        staff_profile_id:values.staffProfileId||null,role_name:values.roleName,
+        starts_at:iso(values.startsAt),ends_at:iso(values.endsAt),break_minutes:values.breakMinutes,
+        hourly_cost_minor:minor(values.hourlyCost).toString(),status:values.status,
+        source:values.staffProfileId?"manual":"open_shift",published_at:values.status==="published"?new Date().toISOString():null,
+        created_by:user.id,
+      });
+      if(error) throw error;
+      return NextResponse.json({message:values.staffProfileId?"Dienst ingepland.":"Open dienst aangemaakt."},{status:201});
+    }
+    if (input.workflow === "availability") {
+      const values=availabilitySchema.parse(input.values);
+      if(new Date(values.endsAt)<=new Date(values.startsAt)) throw new Error("invalid_window");
+      const {supabase}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
+      const {error}=await supabase.from("staff_availability").insert({
+        organisation_id:input.organisationId,venue_id:values.venueId,staff_profile_id:values.staffProfileId,
+        starts_at:iso(values.startsAt),ends_at:iso(values.endsAt),availability:values.availability,
+        source:"manager",note:values.note||null,
+      });
+      if(error) throw error;
+      return NextResponse.json({message:"Beschikbaarheid verwerkt in het planbord."},{status:201});
     }
     const values = incidentSchema.parse(input.values);
     const { supabase, user } = await requireMembership(input.organisationId, "compliance.manage", values.venueId);
