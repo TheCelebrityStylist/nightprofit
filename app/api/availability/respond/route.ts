@@ -6,7 +6,7 @@ import type {Database,Json} from "../../../../lib/supabase/types";
 import {hashAvailabilityToken,validateAvailabilityEntries} from "../../../../lib/workforce/availability";
 
 const entry=z.object({startsAt:z.iso.datetime(),endsAt:z.iso.datetime(),availability:z.enum(["available","preferred","unavailable"]),note:z.string().trim().max(500).optional()});
-const schema=z.object({token:z.string(),periodStart:z.iso.datetime(),periodEnd:z.iso.datetime(),entries:z.array(entry).min(1).max(100)});
+const schema=z.object({token:z.string(),periodStart:z.iso.datetime({offset:true}),periodEnd:z.iso.datetime({offset:true}),entries:z.array(entry).min(1).max(100)});
 
 export async function POST(request:Request){
   try{
