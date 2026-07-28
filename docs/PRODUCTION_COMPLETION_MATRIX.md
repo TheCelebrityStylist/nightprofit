@@ -13,7 +13,7 @@ Status is evidence-based. “Implemented” never means credential-tested.
 | Organisation, venue and invitation persistence | Incomplete | Yes | Pending deployed browser test | Server actions and schema | Email delivery optional |
 | Nightly close persistence and snapshots | Prototype UI only | Usable authenticated list, detail, exact line entry, server transitions, successor reopen, audit line and approval snapshot | Local calculation/build tests; authenticated browser flow pending | `/app/close*`, `/api/closes*`, protected `transition_close` | Seeded test users |
 | Events and organiser payouts | Prototype UI only | Partial | Unit tested | Schema and calculation library | None |
-| Products, recipes and margin history | Prototype UI only | Partial | Unit tested | Schema and calculation library | None |
+| Products, recipes and margin history | Prototype UI only | Product + effective cost and first-component recipe + immutable price/margin snapshot are usable and atomic; multi-component editing, nested recipes and price simulation remain | Financial tests and production build passed; authenticated browser acceptance pending | `/app/products`, protected PostgreSQL functions, operational events | Controlled test identity |
 | Invoice private upload/manual review | Prototype UI only | Partial | Remote pending | Storage/schema boundary | Supabase project |
 | OpenAI invoice extraction | Incomplete | No | No | Adapter boundary only | OpenAI key |
 | CSV transactional imports | Prototype UI only | Partial | Unit tests pending expansion | Schema/import module | Supabase project |
@@ -46,6 +46,7 @@ Status is evidence-based. “Implemented” never means credential-tested.
 - `20260728000400_operations_control_loop`: reviewed, applied and production-verified (10 tables, 20 initial policies, 2 protected functions).
 - `20260728000500_employee_planning_boundary`: applied; employee self-service and manager-only roster publication verified remotely.
 - `20260728000600_service_role_default_grants`: applied after remote tests exposed missing grants on post-foundation tables.
+- `20260728000900_product_recipe_workflow`: applied and registered; atomic product/cost and menu-item/component/margin commands are available.
 - Sites hosting access is public. Product data remains protected by Supabase authentication, membership checks and RLS.
 
 ## Acceptance gate

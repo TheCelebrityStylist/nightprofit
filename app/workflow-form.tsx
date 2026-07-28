@@ -67,7 +67,7 @@ export function WorkflowForm({
             ) : field.type === "textarea" ? (
               <textarea name={field.name} required={field.required} placeholder={field.placeholder} rows={3} />
             ) : (
-              <input name={field.name} type={field.type ?? "text"} required={field.required} placeholder={field.placeholder} />
+              <input name={field.name} type={field.type ?? "text"} step={field.type==="number"?"any":undefined} required={field.required} placeholder={field.placeholder} />
             )}
           </label>
         ))}

@@ -14,6 +14,11 @@ export interface Database {
       stripe_webhook_events: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
       audit_logs: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: never; Relationships: [] };
       suppliers: { Row: { id:string;organisation_id:string;name:string;vat_number:string|null;email:string|null;created_at:string;updated_at:string }; Insert: { organisation_id:string;name:string;vat_number?:string|null;email?:string|null }; Update: Record<string,unknown>; Relationships: [] };
+      products: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      product_cost_history: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      menu_items: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      menu_item_components: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      menu_price_history: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
       booking_inquiries: { Row: { id:string;organisation_id:string;venue_id:string;status:string;source:string;preferred_start:string;flexible:boolean;group_size:number;occasion:string|null;budget_minor:string|null;package_interest:string|null;preferences:Json;accessibility_notes:string|null;contact_name:string;contact_email:string;contact_phone:string|null;consent_at:string|null;assigned_to:string|null;created_at:string;updated_at:string }; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
       events: { Row: { id:string;organisation_id:string;venue_id:string;name:string;concept:string|null;event_type:string;starts_at:string;ends_at:string;expected_attendance:number|null;actual_attendance:number|null;notes:string|null;created_by:string;created_at:string;updated_at:string }; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
       event_yield_scenarios: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: never; Relationships: [] };
@@ -65,6 +70,8 @@ export interface Database {
       create_availability_request: { Args: { target_organisation_id:string;target_venue_id:string;target_starts_at:string;target_ends_at:string;target_deadline_at:string;recipient_inputs:Json }; Returns:string };
       inspect_availability_request: { Args: { target_token_hash:string }; Returns:Json };
       submit_availability_request: { Args: { target_token_hash:string;entry_inputs:Json }; Returns:Json };
+      create_product_with_cost: { Args: { target_organisation_id:string;target_supplier_id:string|null;target_name:string;target_brand:string;target_category:string;target_sku:string;target_barcode:string;target_package_quantity:number;target_unit_volume_ml:number|null;target_purchase_unit:string;target_serving_unit:string;target_net_cost_minor:string;target_vat_basis_points:number;target_deposit_minor:string }; Returns:Record<string,unknown> };
+      create_menu_item_with_component: { Args: { target_organisation_id:string;target_venue_id:string;target_name:string;target_category:string;target_product_id:string;target_quantity:number;target_unit:string;target_waste_basis_points:number;target_gross_price_minor:string;target_vat_basis_points:number;target_margin_basis_points:number }; Returns:Record<string,unknown> };
     };
     Enums: { member_role: MemberRole };
     CompositeTypes: Record<string,never>;

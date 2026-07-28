@@ -10,7 +10,7 @@ import "./real-app.css";
 
 const navigation = [
   ["Vandaag", "/app/dashboard"], ["Sales & Demand", "/app/bookings"],
-  ["Plan & Rooster", "/app/planning"], ["Inkoop & Marge", "/app/suppliers"],
+  ["Plan & Rooster", "/app/planning"], ["Producten & Recepten", "/app/products"], ["Inkoop & Marge", "/app/suppliers"],
   ["Mijn werk", "/app/my-work"],
   ["Close & Learn", "/app/close"],
   ["Event Yield", "/app/yield"], ["Team & Compliance", "/app/compliance"],
@@ -64,6 +64,7 @@ export async function AuthenticatedApp({ path }: { path: string }) {
   else if (path === "/app/planning") content = await planning(supabase, organisationId, venues);
   else if (path === "/app/my-work") content = await myWork(supabase, organisationId, venues, user.id);
   else if (path === "/app/suppliers") content = await suppliers(supabase, organisationId);
+  else if (path === "/app/products") content = await productsAndRecipes(supabase, organisationId, venues);
   else if (path === "/app/yield") content = await eventYield(supabase, organisationId, venues);
   else if (path === "/app/compliance") content = await compliance(supabase, organisationId, venues);
   else if (path === "/app/integrations") content = integrations();
@@ -253,6 +254,49 @@ async function bookings(supabase:Awaited<ReturnType<typeof createSupabaseServerC
     {name:"budget",label:"Budget (€)",placeholder:"1500,00"},{name:"occasion",label:"Gelegenheid"},{name:"source",label:"Bron",required:true,placeholder:"Website, telefoon, partner…"},
     {name:"preferences",label:"Voorkeuren en toegankelijkheid",type:"textarea"},
   ]}/><RecordPanel title="Aanvraagpipeline" empty="Nog geen groepsaanvragen.">{rows.map(row=><div className="record-row" key={row.id}><b>{row.contact_name} · {row.group_size} gasten</b><span>{date(row.preferred_start)} · {row.occasion||"Geen gelegenheid"} · {row.status}</span><em>{row.budget_minor?euro(row.budget_minor):"Budget onbekend"}</em></div>)}</RecordPanel></div>;
+}
+
+async function productsAndRecipes(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>, organisationId:string, venues:Venue[]) {
+  const [{data:supplierData},{data:productData},{data:costData},{data:itemData},{data:priceData}]=await Promise.all([
+    supabase.from("suppliers").select("id,name").eq("organisation_id",organisationId).order("name"),
+    supabase.from("products").select("id,name,brand,category,sku,package_quantity,purchase_unit,serving_unit,supplier_id").eq("organisation_id",organisationId).order("name"),
+    supabase.from("product_cost_history").select("product_id,net_cost_minor,vat_basis_points,effective_at").eq("organisation_id",organisationId).order("effective_at",{ascending:false}),
+    supabase.from("menu_items").select("id,venue_id,name,category,target_margin_basis_points").eq("organisation_id",organisationId).order("name"),
+    supabase.from("menu_price_history").select("menu_item_id,gross_price_minor,direct_cost_snapshot_minor,margin_snapshot_basis_points,effective_at").eq("organisation_id",organisationId).order("effective_at",{ascending:false}),
+  ]);
+  const suppliers=(supplierData??[]) as unknown as {id:string;name:string}[];
+  const products=(productData??[]) as unknown as {id:string;name:string;brand:string|null;category:string;sku:string|null;package_quantity:string;purchase_unit:string;serving_unit:string;supplier_id:string|null}[];
+  const costs=(costData??[]) as unknown as {product_id:string;net_cost_minor:string;vat_basis_points:number;effective_at:string}[];
+  const items=(itemData??[]) as unknown as {id:string;venue_id:string|null;name:string;category:string;target_margin_basis_points:number}[];
+  const prices=(priceData??[]) as unknown as {menu_item_id:string;gross_price_minor:string;direct_cost_snapshot_minor:string;margin_snapshot_basis_points:number;effective_at:string}[];
+  const supplierOptions=[{label:"Geen voorkeursleverancier",value:""},...suppliers.map(row=>({label:row.name,value:row.id}))];
+  const productOptions=products.map(row=>({label:`${row.name} · ${row.serving_unit}`,value:row.id}));
+  return <div className="workflow-stack">
+    <section className="connected-flow"><span>Leverancier</span><b>→</b><span>Product + prijs</span><b>→</b><span>Receptkost</span><b>→</b><span>Menuprijs</span><b>→</b><span>Marge-snapshot</span></section>
+    <div className="split-workspace">
+      <WorkflowForm organisationId={organisationId} workflow="product" title="Product met actuele inkoopprijs" submitLabel="Product opslaan" fields={[
+        {name:"supplierId",label:"Voorkeursleverancier",type:"select",options:supplierOptions},{name:"name",label:"Productnaam",required:true},
+        {name:"brand",label:"Merk"},{name:"category",label:"Categorie",required:true},{name:"sku",label:"Interne SKU"},{name:"barcode",label:"Barcode"},
+        {name:"packageQuantity",label:"Aantal basiseenheden per inkoopverpakking",type:"number",required:true},
+        {name:"unitVolumeMl",label:"Inhoud ml (optioneel)",type:"number"},{name:"purchaseUnit",label:"Inkoopeenheid",required:true,placeholder:"fles, krat, doos"},
+        {name:"servingUnit",label:"Recept-/basiseenheid",required:true,placeholder:"ml, gram, stuk"},
+        {name:"netCost",label:"Netto inkoopprijs (€)",required:true},{name:"vatBasisPoints",label:"Btw",type:"select",required:true,options:[{label:"9%",value:"900"},{label:"21%",value:"2100"},{label:"0%",value:"0"}]},
+        {name:"deposit",label:"Statiegeld (€)",placeholder:"0,00"},
+      ]}/>
+      <RecordPanel title="Productmaster" empty="Voeg eerst een product en de geldende inkoopprijs toe.">{products.map(row=>{const cost=costs.find(c=>c.product_id===row.id);return <div className="record-row" key={row.id}><b>{row.name}{row.brand?` · ${row.brand}`:""}</b><span>{row.category} · {row.package_quantity} {row.serving_unit} per {row.purchase_unit}<small>{row.sku||"Geen SKU"} · {suppliers.find(s=>s.id===row.supplier_id)?.name||"Geen voorkeursleverancier"}</small></span><em>{cost?euro(cost.net_cost_minor):"Prijs ontbreekt"}<small>{cost?`${cost.vat_basis_points/100}% btw · ${date(cost.effective_at)}`:""}</small></em></div>})}</RecordPanel>
+    </div>
+    {products.length?<div className="split-workspace">
+      <WorkflowForm organisationId={organisationId} workflow="menu_item" title="Menu-item met eerste receptcomponent" submitLabel="Recept en marge opslaan" fields={[
+        {name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues)},{name:"name",label:"Menu-item",required:true},
+        {name:"category",label:"Categorie",required:true},{name:"productId",label:"Productcomponent",type:"select",required:true,options:productOptions},
+        {name:"quantity",label:"Hoeveelheid in recept-/basiseenheid",type:"number",required:true},{name:"unit",label:"Eenheid (exact gelijk aan product)",required:true},
+        {name:"wasteBasisPoints",label:"Verspilling (basispunten; 250 = 2,5%)",type:"number",required:true},
+        {name:"grossPrice",label:"Verkoopprijs incl. btw (€)",required:true},{name:"vatBasisPoints",label:"Btw",type:"select",required:true,options:[{label:"9%",value:"900"},{label:"21%",value:"2100"}]},
+        {name:"targetMarginBasisPoints",label:"Doelmarge (basispunten)",type:"number",required:true},
+      ]}/>
+      <RecordPanel title="Menuprijzen en marge-snapshots" empty="Nog geen menu-item berekend.">{items.map(row=>{const price=prices.find(p=>p.menu_item_id===row.id);return <div className="record-row" key={row.id}><b>{row.name} · {row.category}</b><span>{venues.find(v=>v.id===row.venue_id)?.name||"Alle vestigingen"}<small>Doelmarge {row.target_margin_basis_points/100}%</small></span><em>{price?euro(price.gross_price_minor):"Prijs ontbreekt"}<small>{price?`kost ${euro(price.direct_cost_snapshot_minor)} · marge ${price.margin_snapshot_basis_points/100}%`:""}</small></em></div>})}</RecordPanel>
+    </div>:<div className="legal-note">Maak eerst een product met actuele inkoopprijs aan; daarna wordt het receptformulier beschikbaar.</div>}
+  </div>;
 }
 
 async function suppliers(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>, organisationId:string) {

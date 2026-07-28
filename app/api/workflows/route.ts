@@ -5,7 +5,7 @@ import { decimalToMinor } from "../../../lib/imports/locale-number";
 import { add, breakEvenRevenue, eventContribution, marginBasisPoints, money } from "../../../lib/calculations";
 
 const envelope = z.object({
-  workflow: z.enum(["booking_inquiry", "supplier", "event_yield", "staff_profile", "incident"]),
+  workflow: z.enum(["booking_inquiry", "supplier", "product", "menu_item", "event_yield", "staff_profile", "incident"]),
   organisationId: z.string().uuid(),
   values: z.record(z.string(), z.string()),
 });
@@ -19,6 +19,20 @@ const bookingSchema = z.object({
 });
 const supplierSchema = z.object({
   name: z.string().trim().min(2).max(160), contactEmail: z.union([z.email(), z.literal("")]).default(""),
+});
+const productSchema = z.object({
+  supplierId:z.union([z.string().uuid(),z.literal("")]).default(""), name:z.string().trim().min(2).max(160),
+  brand:z.string().trim().max(120).default(""), category:z.string().trim().min(2).max(120),
+  sku:z.string().trim().max(80).default(""), barcode:z.string().trim().max(80).default(""),
+  packageQuantity:z.coerce.number().positive(), unitVolumeMl:z.union([z.coerce.number().positive(),z.literal("")]).default(""),
+  purchaseUnit:z.string().trim().min(1).max(40), servingUnit:z.string().trim().min(1).max(40),
+  netCost:z.string(), vatBasisPoints:z.coerce.number().int(), deposit:z.string().default("0"),
+});
+const menuItemSchema = z.object({
+  venueId:z.string().uuid(), name:z.string().trim().min(2).max(160), category:z.string().trim().min(2).max(120),
+  productId:z.string().uuid(), quantity:z.coerce.number().positive(), unit:z.string().trim().min(1).max(40),
+  wasteBasisPoints:z.coerce.number().int().min(0).max(10000), grossPrice:z.string(),
+  vatBasisPoints:z.coerce.number().int(), targetMarginBasisPoints:z.coerce.number().int().min(0).max(10000),
 });
 const eventSchema = z.object({
   venueId: z.string().uuid(), name: z.string().trim().min(2).max(160),
@@ -65,6 +79,34 @@ export async function POST(request: Request) {
       });
       if (error) throw error;
       return NextResponse.json({ message: "Leverancier opgeslagen." }, { status: 201 });
+    }
+    if (input.workflow === "product") {
+      const values=productSchema.parse(input.values);
+      const {supabase}=await requireMembership(input.organisationId,"suppliers.manage");
+      const {error}=await supabase.rpc("create_product_with_cost",{
+        target_organisation_id:input.organisationId,target_supplier_id:values.supplierId||null,
+        target_name:values.name,target_brand:values.brand,target_category:values.category,target_sku:values.sku,
+        target_barcode:values.barcode,target_package_quantity:values.packageQuantity,
+        target_unit_volume_ml:values.unitVolumeMl===""?null:values.unitVolumeMl,
+        target_purchase_unit:values.purchaseUnit,target_serving_unit:values.servingUnit,
+        target_net_cost_minor:minor(values.netCost).toString(),target_vat_basis_points:values.vatBasisPoints,
+        target_deposit_minor:minor(values.deposit).toString(),
+      });
+      if(error)throw error;
+      return NextResponse.json({message:"Product en actuele inkoopprijs atomair opgeslagen."},{status:201});
+    }
+    if (input.workflow === "menu_item") {
+      const values=menuItemSchema.parse(input.values);
+      const {supabase}=await requireMembership(input.organisationId,"suppliers.manage",values.venueId);
+      const {error}=await supabase.rpc("create_menu_item_with_component",{
+        target_organisation_id:input.organisationId,target_venue_id:values.venueId,target_name:values.name,
+        target_category:values.category,target_product_id:values.productId,target_quantity:values.quantity,
+        target_unit:values.unit,target_waste_basis_points:values.wasteBasisPoints,
+        target_gross_price_minor:minor(values.grossPrice).toString(),target_vat_basis_points:values.vatBasisPoints,
+        target_margin_basis_points:values.targetMarginBasisPoints,
+      });
+      if(error)throw error;
+      return NextResponse.json({message:"Menu-item, receptkost en marge-snapshot opgeslagen."},{status:201});
     }
     if (input.workflow === "event_yield") {
       const values = eventSchema.parse(input.values);
