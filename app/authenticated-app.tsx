@@ -1,8 +1,9 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "../lib/supabase/server";
+import { AuthForm } from "./auth-form";
 import { CloseForm } from "./close-form";
 import { CloseWorkspace } from "./close-workspace";
+import { OnboardingForm } from "./onboarding/onboarding-form";
 import { WorkflowForm } from "./workflow-form";
 import "./real-app.css";
 
@@ -29,11 +30,11 @@ const venueOptions = (venues:Venue[]) => venues.map((venue)=>({label:venue.name,
 
 export async function AuthenticatedApp({ path }: { path: string }) {
   const supabase = await createSupabaseServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) redirect(`/login?next=${encodeURIComponent(path)}`);
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError || !user) return <AuthForm mode="login"/>;
   const { data: memberships, error: membershipError } = await supabase.from("organisation_members").select("organisation_id,role").eq("user_id", user.id);
   if (membershipError) throw new Error("Membership lookup failed");
-  if (!memberships?.length) redirect("/onboarding");
+  if (!memberships?.length) return <OnboardingForm/>;
   const membership = memberships[0];
   const organisationId = membership.organisation_id;
   const [{ data: organisation }, { data: venuesData }, { data: closesData }] = await Promise.all([
@@ -41,7 +42,7 @@ export async function AuthenticatedApp({ path }: { path: string }) {
     supabase.from("venues").select("id,name,timezone").eq("organisation_id", organisationId).order("name"),
     supabase.from("closing_sessions").select("id,venue_id,trading_date,status,version,expected_total_minor,accounted_total_minor,difference_minor").eq("organisation_id", organisationId).order("trading_date",{ascending:false}).limit(50),
   ]);
-  if (!organisation) redirect("/onboarding");
+  if (!organisation) return <OnboardingForm/>;
   const venues = (venuesData ?? []) as Venue[];
   const closes = (closesData ?? []) as Close[];
   const activeLabel = navigation.find(([, href]) => path===href)?.[0] ?? (
