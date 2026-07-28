@@ -31,8 +31,11 @@ const date = (value:string) => new Intl.DateTimeFormat("nl-NL",{dateStyle:"mediu
 const venueOptions = (venues:Venue[]) => venues.map((venue)=>({label:venue.name,value:venue.id}));
 
 export async function AuthenticatedApp({ path }: { path: string }) {
-  const supabase = await createSupabaseServerClient();
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  const supabase = await createSupabaseServerClient().catch(()=>null);
+  if(!supabase)return <AuthForm mode="login"/>;
+  const authResult = await supabase.auth.getUser().catch(()=>null);
+  if(!authResult)return <AuthForm mode="login"/>;
+  const { data: { user }, error: authError } = authResult;
   if (authError || !user) return <AuthForm mode="login"/>;
   const { data: memberships, error: membershipError } = await supabase.from("organisation_members").select("organisation_id,role").eq("user_id", user.id);
   if (membershipError) throw new Error("Membership lookup failed");
