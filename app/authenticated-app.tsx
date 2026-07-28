@@ -5,6 +5,7 @@ import { CloseForm } from "./close-form";
 import { CloseWorkspace } from "./close-workspace";
 import { OnboardingForm } from "./onboarding/onboarding-form";
 import { WorkflowForm } from "./workflow-form";
+import { AvailabilityManager } from "./availability-manager";
 import "./real-app.css";
 
 const navigation = [
@@ -138,13 +139,15 @@ async function dashboard(supabase:Awaited<ReturnType<typeof createSupabaseServer
 }
 
 async function planning(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>, organisationId:string, venues:Venue[]) {
-  const [{data:departmentData},{data:roleData},{data:staffData},{data:intervalData},{data:shiftData},{data:proposalData}]=await Promise.all([
+  const [{data:departmentData},{data:roleData},{data:staffData},{data:intervalData},{data:shiftData},{data:proposalData},{data:requestData},{data:recipientData}]=await Promise.all([
     supabase.from("departments").select("id,venue_id,name").eq("organisation_id",organisationId).order("name"),
     supabase.from("operational_roles").select("id,department_id,name,hourly_cost_minor,minimum_staff,guests_per_staff").eq("organisation_id",organisationId).order("name"),
     supabase.from("staff_profiles").select("id,full_name,role_name").eq("organisation_id",organisationId).order("full_name"),
     supabase.from("demand_forecast_intervals").select("id,venue_id,starts_at,ends_at,expected_guests,expected_revenue_minor,required_staff").eq("organisation_id",organisationId).order("starts_at",{ascending:false}).limit(30),
     supabase.from("shifts").select("id,venue_id,department_id,role_id,staff_id,starts_at,ends_at,break_minutes,hourly_cost_minor,status").eq("organisation_id",organisationId).order("starts_at",{ascending:false}).limit(50),
     supabase.from("ai_proposals").select("id,action_type,rationale,proposed_change,missing_data,confidence_basis,approval_status,execution_status,created_at").eq("organisation_id",organisationId).eq("action_type","schedule_proposal").order("created_at",{ascending:false}).limit(10),
+    supabase.from("availability_request_periods").select("id,venue_id,starts_at,ends_at,deadline_at,status,created_at").eq("organisation_id",organisationId).order("created_at",{ascending:false}).limit(20),
+    supabase.from("availability_request_recipients").select("id,request_id,staff_id,status,opened_at,submitted_at").eq("organisation_id",organisationId).order("created_at",{ascending:false}).limit(200),
   ]);
   const departments=(departmentData??[]) as unknown as {id:string;venue_id:string;name:string}[];
   const roles=(roleData??[]) as unknown as {id:string;department_id:string;name:string;hourly_cost_minor:string;minimum_staff:number;guests_per_staff:number}[];
@@ -152,11 +155,14 @@ async function planning(supabase:Awaited<ReturnType<typeof createSupabaseServerC
   const intervals=(intervalData??[]) as unknown as {id:string;venue_id:string;starts_at:string;ends_at:string;expected_guests:number;expected_revenue_minor:string;required_staff:number}[];
   const shifts=(shiftData??[]) as unknown as {id:string;venue_id:string;department_id:string;role_id:string;staff_id:string|null;starts_at:string;ends_at:string;break_minutes:number;hourly_cost_minor:string;status:string}[];
   const proposals=(proposalData??[]) as unknown as {id:string;rationale:string;missing_data:string[];confidence_basis:string;approval_status:string;execution_status:string;created_at:string}[];
+  const requests=(requestData??[]) as unknown as {id:string;venue_id:string;starts_at:string;ends_at:string;deadline_at:string;status:string;created_at:string}[];
+  const recipients=(recipientData??[]) as unknown as {id:string;request_id:string;staff_id:string;status:string;opened_at:string|null;submitted_at:string|null}[];
   const departmentOptions=departments.map(row=>({label:row.name,value:row.id}));
   const roleOptions=roles.map(row=>({label:row.name,value:row.id}));
   const staffOptions=[{label:"Open dienst",value:"open"},...staff.map(row=>({label:`${row.full_name} · ${row.role_name}`,value:row.id}))];
   return <div className="workflow-stack">
     <section className="connected-flow"><span>Vraag</span><b>→</b><span>Forecast</span><b>→</b><span>Rooster</span><b>→</b><span>Publicatie</span><b>→</b><span>Uren</span><b>→</b><span>Close & Learn</span></section>
+    <div className="split-workspace"><AvailabilityManager organisationId={organisationId} venues={venues.map(v=>({id:v.id,label:v.name}))} staff={staff.map(person=>({id:person.id,label:`${person.full_name} · ${person.role_name}`}))}/><RecordPanel title="Beschikbaarheidsaanvragen" empty="Nog geen aanvragen verstuurd.">{requests.map(request=>{const rows=recipients.filter(row=>row.request_id===request.id);return <div className="record-row" key={request.id}><b>{venues.find(v=>v.id===request.venue_id)?.name||"Vestiging"} · {request.status}</b><span>{date(request.starts_at)}–{date(request.ends_at)}<small>{rows.map(row=>`${staff.find(s=>s.id===row.staff_id)?.full_name||"Medewerker"}: ${row.status}`).join(" · ")}</small></span><em>{rows.filter(row=>row.status==="submitted").length}/{rows.length} ingediend<small>Deadline {date(request.deadline_at)}</small></em></div>})}</RecordPanel></div>
     <div className="split-workspace">
       <WorkflowForm endpoint="/api/planning" organisationId={organisationId} workflow="forecast" title="Vraaginterval plannen" submitLabel="Forecast opslaan" fields={[
         {name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues)},{name:"tradingDate",label:"Handelsdatum",type:"date",required:true},

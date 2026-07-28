@@ -62,6 +62,9 @@ export interface Database {
       clock_in: { Args: { target_organisation_id:string;target_venue_id:string;target_shift_id?:string|null }; Returns:Record<string,unknown> };
       clock_out: { Args: { target_organisation_id:string;target_time_record_id:string }; Returns:Record<string,unknown> };
       approve_time_record: { Args: { target_organisation_id:string;target_time_record_id:string;target_correction_reason?:string|null }; Returns:Record<string,unknown> };
+      create_availability_request: { Args: { target_organisation_id:string;target_venue_id:string;target_starts_at:string;target_ends_at:string;target_deadline_at:string;recipient_inputs:Json }; Returns:string };
+      inspect_availability_request: { Args: { target_token_hash:string }; Returns:Json };
+      submit_availability_request: { Args: { target_token_hash:string;entry_inputs:Json }; Returns:Json };
     };
     Enums: { member_role: MemberRole };
     CompositeTypes: Record<string,never>;
