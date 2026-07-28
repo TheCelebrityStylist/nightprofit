@@ -35,6 +35,9 @@
 .real-app .connected-flow{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
 .real-app .connected-flow span{padding:7px 10px;border-radius:8px;background:var(--ink);font-size:12px}.real-app .connected-flow b{color:var(--lime)}
 .real-app .severity{display:inline-block;padding:3px 6px;border-radius:999px;font-size:10px;text-transform:uppercase;background:#2f342b}.real-app .severity.high,.real-app .severity.critical{background:#4a2424;color:#ffb3b3}
+.real-app .mobile-roster{display:grid;gap:12px}.real-app .mobile-roster>article{display:grid;grid-template-columns:1fr auto;gap:14px;padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
+.real-app .mobile-roster article>div{display:grid;gap:6px}.real-app .mobile-roster article span{color:var(--muted);font-size:13px}.real-app .mobile-roster article em{font-style:normal;color:var(--lime);font-size:12px;text-transform:uppercase}
+.real-app .mobile-roster .workflow-card{grid-column:1/-1;background:var(--ink)}
 @media(max-width:900px){
   .real-app .metric-grid,.real-app .split-workspace{grid-template-columns:1fr}.real-app .content{padding:20px}.real-app .tr{grid-template-columns:1fr 1fr}
   .real-app .workflow-fields,.real-app .workflow-fields.three{grid-template-columns:1fr}.real-app .detail-head,.real-app .money-summary{display:grid}

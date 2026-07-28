@@ -38,6 +38,19 @@ export interface Database {
       time_records: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
       operating_actions: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
       ai_proposals: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      operational_events: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      availability_request_periods: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      availability_request_recipients: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      roster_versions: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      roster_acknowledgements: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      open_shift_offers: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      open_shift_claims: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      swap_requests: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      time_breaks: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      time_corrections: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      whatsapp_templates: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      notification_outbox: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      webhook_events: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
     };
     Views: Record<string,never>;
     Functions: {
@@ -46,6 +59,9 @@ export interface Database {
       transition_close: { Args: { target_close_id:string; target_status:string; reason?:string|null }; Returns:Database["public"]["Tables"]["closing_sessions"]["Row"] };
       create_demand_plan: { Args: { target_organisation_id:string;target_venue_id:string;target_trading_date:string;interval_inputs:Json;target_assumptions?:Json }; Returns:Record<string,unknown> };
       publish_roster: { Args: { target_organisation_id:string;target_venue_id:string;window_start:string;window_end:string }; Returns:number };
+      clock_in: { Args: { target_organisation_id:string;target_venue_id:string;target_shift_id?:string|null }; Returns:Record<string,unknown> };
+      clock_out: { Args: { target_organisation_id:string;target_time_record_id:string }; Returns:Record<string,unknown> };
+      approve_time_record: { Args: { target_organisation_id:string;target_time_record_id:string;target_correction_reason?:string|null }; Returns:Record<string,unknown> };
     };
     Enums: { member_role: MemberRole };
     CompositeTypes: Record<string,never>;

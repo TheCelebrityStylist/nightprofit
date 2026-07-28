@@ -4,4 +4,4 @@ export type Capability =
   | "bookings.manage" | "bookings.discount" | "suppliers.manage" | "invoices.confirm"
   | "events.manage" | "compliance.manage" | "reports.view" | "exports.create"
   | "evidence.view" | "planning.manage" | "planning.respond" | "time.manage"
-  | "time.record" | "actions.manage" | "ai.propose";
+  | "time.record" | "time.approve" | "workforce.manage" | "actions.manage" | "ai.propose";

@@ -40,7 +40,7 @@ export function WorkflowForm({
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(endpoint === "/api/planning" ? { action: workflow, organisationId, values } : { workflow, organisationId, values }),
+      body: JSON.stringify(["/api/planning","/api/workforce"].includes(endpoint) ? { action: workflow, organisationId, values } : { workflow, organisationId, values }),
     });
     const result = (await response.json()) as { error?: string; message?: string };
     setPending(false);

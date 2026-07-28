@@ -10,6 +10,7 @@ import "./real-app.css";
 const navigation = [
   ["Vandaag", "/app/dashboard"], ["Sales & Demand", "/app/bookings"],
   ["Plan & Rooster", "/app/planning"], ["Inkoop & Marge", "/app/suppliers"],
+  ["Mijn werk", "/app/my-work"],
   ["Close & Learn", "/app/close"],
   ["Event Yield", "/app/yield"], ["Team & Compliance", "/app/compliance"],
   ["Alerts & Actions", "/app/alerts"], ["Reports", "/app/reports"],
@@ -57,6 +58,7 @@ export async function AuthenticatedApp({ path }: { path: string }) {
   else if (path.startsWith("/app/close/")) content = await closeDetail(supabase, organisationId, path.split("/").at(-1) ?? "", venues);
   else if (path === "/app/bookings") content = await bookings(supabase, organisationId, venues);
   else if (path === "/app/planning") content = await planning(supabase, organisationId, venues);
+  else if (path === "/app/my-work") content = await myWork(supabase, organisationId, venues, user.id);
   else if (path === "/app/suppliers") content = await suppliers(supabase, organisationId);
   else if (path === "/app/yield") content = await eventYield(supabase, organisationId, venues);
   else if (path === "/app/compliance") content = await compliance(supabase, organisationId, venues);
@@ -181,6 +183,30 @@ async function planning(supabase:Awaited<ReturnType<typeof createSupabaseServerC
       <WorkflowForm endpoint="/api/planning" organisationId={organisationId} workflow="proposal" title="Uitlegbare roostercontrole" submitLabel="Voorstel genereren" fields={[{name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues)},{name:"tradingDate",label:"Handelsdatum",type:"date",required:true}]}/>
     </div>
     <RecordPanel title="Governed voorstellen" empty="Nog geen planningvoorstellen.">{proposals.map(row=><div className="record-row" key={row.id}><b>{row.approval_status} · {date(row.created_at)}</b><span>{row.rationale}<small>{row.confidence_basis}</small></span><em>{row.execution_status}{row.missing_data.length?<small>{row.missing_data.join(" ")}</small>:null}</em></div>)}</RecordPanel>
+  </div>;
+}
+
+async function myWork(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>, organisationId:string, venues:Venue[], userId:string){
+  const {data:profile}=await supabase.from("staff_profiles").select("id,full_name").eq("organisation_id",organisationId).eq("auth_user_id",userId).maybeSingle();
+  if(!profile)return <section className="panel"><div className="empty-state"><h2>Medewerkersprofiel vereist</h2><p>Vraag je manager om je account aan een medewerkersprofiel te koppelen.</p></div></section>;
+  const staff=profile as unknown as {id:string;full_name:string};
+  const [{data:shiftData},{data:responseData},{data:timeData},{data:availabilityData}]=await Promise.all([
+    supabase.from("shifts").select("id,venue_id,starts_at,ends_at,break_minutes,status").eq("organisation_id",organisationId).eq("staff_id",staff.id).gte("ends_at",new Date().toISOString()).order("starts_at").limit(14),
+    supabase.from("shift_responses").select("shift_id,response").eq("organisation_id",organisationId).eq("staff_id",staff.id),
+    supabase.from("time_records").select("id,venue_id,clocked_in_at,clocked_out_at,break_minutes,status,approved_at").eq("organisation_id",organisationId).eq("staff_id",staff.id).order("clocked_in_at",{ascending:false}).limit(14),
+    supabase.from("staff_availability").select("id,starts_at,ends_at,availability").eq("organisation_id",organisationId).eq("staff_id",staff.id).gte("ends_at",new Date().toISOString()).order("starts_at").limit(14),
+  ]);
+  const shifts=(shiftData??[]) as unknown as {id:string;venue_id:string;starts_at:string;ends_at:string;break_minutes:number;status:string}[];
+  const responses=(responseData??[]) as unknown as {shift_id:string;response:string}[];
+  const records=(timeData??[]) as unknown as {id:string;venue_id:string;clocked_in_at:string;clocked_out_at:string|null;break_minutes:number;status:string;approved_at:string|null}[];
+  const availability=(availabilityData??[]) as unknown as {id:string;starts_at:string;ends_at:string;availability:string}[];
+  const openRecord=records.find(record=>!record.clocked_out_at);
+  const next=shifts[0];
+  return <div className="workflow-stack employee-work">
+    <section className="morning-brief"><div><div className="eyebrow">MIJN WERK · {staff.full_name}</div><h2>{next?`Volgende dienst ${new Date(next.starts_at).toLocaleString("nl-NL",{weekday:"long",hour:"2-digit",minute:"2-digit"})}`:"Geen komende dienst"}</h2><p>Alleen jouw rooster, beschikbaarheid en uren zijn hier zichtbaar.</p></div><span className="status">{openRecord?"ingeklokt":"niet ingeklokt"}</span></section>
+    {openRecord?<WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="clock_out" title="Lopende dienst" submitLabel="Uitklokken en indienen" fields={[{name:"timeRecordId",label:"Urenrecord",type:"select",required:true,options:[{label:`Gestart ${new Date(openRecord.clocked_in_at).toLocaleTimeString("nl-NL",{hour:"2-digit",minute:"2-digit"})}`,value:openRecord.id}]}]}/>:next?<WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="clock_in" title="Aanwezigheid" submitLabel="Inklokken" fields={[{name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues.filter(v=>v.id===next.venue_id))},{name:"shiftId",label:"Dienst",type:"select",required:true,options:[{label:new Date(next.starts_at).toLocaleString("nl-NL"),value:next.id}]}]}/>:null}
+    <section className="mobile-roster" aria-label="Mijn komende rooster">{shifts.length?shifts.map(shift=><article key={shift.id}><div><b>{new Date(shift.starts_at).toLocaleDateString("nl-NL",{weekday:"long",day:"numeric",month:"short"})}</b><span>{new Date(shift.starts_at).toLocaleTimeString("nl-NL",{hour:"2-digit",minute:"2-digit"})}–{new Date(shift.ends_at).toLocaleTimeString("nl-NL",{hour:"2-digit",minute:"2-digit"})} · pauze {shift.break_minutes} min</span></div><em>{responses.find(r=>r.shift_id===shift.id)?.response||shift.status}</em>{!responses.some(r=>r.shift_id===shift.id)&&shift.status==="published"?<WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="respond" title="Bevestig deze dienst" submitLabel="Antwoord opslaan" fields={[{name:"venueId",label:"Vestiging",type:"select",required:true,options:[{label:venues.find(v=>v.id===shift.venue_id)?.name||"Vestiging",value:shift.venue_id}]},{name:"shiftId",label:"Dienst",type:"select",required:true,options:[{label:new Date(shift.starts_at).toLocaleString("nl-NL"),value:shift.id}]},{name:"staffId",label:"Medewerker",type:"select",required:true,options:[{label:staff.full_name,value:staff.id}]},{name:"response",label:"Antwoord",type:"select",required:true,options:[{label:"Accepteren",value:"accepted"},{label:"Afwijzen",value:"rejected"}]},{name:"reason",label:"Reden bij afwijzing"}]}/>:null}</article>):<div className="empty-state"><p>Je hebt nog geen komende diensten.</p></div>}</section>
+    <div className="split-workspace"><RecordPanel title="Beschikbaarheid" empty="Geen komende beschikbaarheid vastgelegd.">{availability.map(row=><div className="record-row" key={row.id}><b>{row.availability}</b><span>{new Date(row.starts_at).toLocaleString("nl-NL")}</span><em>tot {new Date(row.ends_at).toLocaleTimeString("nl-NL",{hour:"2-digit",minute:"2-digit"})}</em></div>)}</RecordPanel><RecordPanel title="Ingediende uren" empty="Nog geen uren ingediend.">{records.map(row=><div className="record-row" key={row.id}><b>{date(row.clocked_in_at)}</b><span>{row.status} · pauze {row.break_minutes} min</span><em>{row.approved_at?"goedgekeurd":"in behandeling"}</em></div>)}</RecordPanel></div>
   </div>;
 }
 
