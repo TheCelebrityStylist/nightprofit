@@ -1,0 +1,78 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+
+type Field = {
+  name: string;
+  label: string;
+  type?: "text" | "email" | "number" | "date" | "datetime-local" | "select" | "textarea";
+  required?: boolean;
+  options?: { label: string; value: string }[];
+  placeholder?: string;
+};
+
+export function WorkflowForm({
+  organisationId,
+  workflow,
+  title,
+  submitLabel,
+  fields,
+}: {
+  organisationId: string;
+  workflow: string;
+  title: string;
+  submitLabel: string;
+  fields: Field[];
+}) {
+  const router = useRouter();
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  async function submit(formData: FormData) {
+    setPending(true);
+    setError("");
+    setSuccess("");
+    const values = Object.fromEntries(formData.entries());
+    const response = await fetch("/api/workflows", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ workflow, organisationId, values }),
+    });
+    const result = (await response.json()) as { error?: string; message?: string };
+    setPending(false);
+    if (!response.ok) {
+      setError(result.error ?? "Opslaan is niet gelukt.");
+      return;
+    }
+    setSuccess(result.message ?? "Opgeslagen.");
+    router.refresh();
+  }
+
+  return (
+    <form className="workflow-card" action={submit}>
+      <h3>{title}</h3>
+      <div className="workflow-fields">
+        {fields.map((field) => (
+          <label key={field.name}>
+            {field.label}
+            {field.type === "select" ? (
+              <select name={field.name} required={field.required} defaultValue="">
+                <option value="" disabled>Kies…</option>
+                {field.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            ) : field.type === "textarea" ? (
+              <textarea name={field.name} required={field.required} placeholder={field.placeholder} rows={3} />
+            ) : (
+              <input name={field.name} type={field.type ?? "text"} required={field.required} placeholder={field.placeholder} />
+            )}
+          </label>
+        ))}
+      </div>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      {success && <p className="form-success" role="status">{success}</p>}
+      <button className="primary" disabled={pending}>{pending ? "Opslaan…" : submitLabel}</button>
+    </form>
+  );
+}

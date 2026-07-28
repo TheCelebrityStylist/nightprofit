@@ -12,4 +12,26 @@
 .real-app .form-grid label{display:grid;gap:7px;font-size:12px;color:var(--muted)}
 .real-app .form-grid input,.real-app .form-grid select{width:100%;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--ink);color:var(--text)}
 .real-app .form-error{color:#ff8f8f}
-@media(max-width:900px){.real-app .metric-grid{grid-template-columns:1fr}.real-app .content{padding:20px}.real-app .tr{grid-template-columns:1fr 1fr}}
+.real-app .form-success{color:var(--lime)}
+.real-app .workflow-stack{display:grid;gap:20px}
+.real-app .split-workspace{display:grid;grid-template-columns:minmax(320px,.8fr) minmax(420px,1.2fr);gap:20px;align-items:start}
+.real-app .workflow-card{display:grid;gap:16px;padding:22px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
+.real-app .workflow-card h3{margin:0}.real-app .workflow-fields{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.real-app .workflow-fields.three{grid-template-columns:repeat(3,1fr)}
+.real-app .workflow-card label,.real-app .reopen-control{display:grid;gap:7px;font-size:12px;color:var(--muted)}
+.real-app .workflow-card input,.real-app .workflow-card select,.real-app .workflow-card textarea,.real-app .reopen-control input{width:100%;padding:11px;border:1px solid var(--line);border-radius:8px;background:var(--ink);color:var(--text);font:inherit}
+.real-app .workflow-card textarea{resize:vertical}.real-app .record-panel{min-width:0}
+.real-app .record-list{display:grid}.real-app .record-list>a,.real-app .record-row{display:grid;grid-template-columns:minmax(150px,1fr) minmax(180px,1.5fr) minmax(120px,.7fr);gap:16px;align-items:center;padding:15px 20px;border-top:1px solid var(--line);color:inherit;text-decoration:none}
+.real-app .record-list span{color:var(--muted);font-size:13px}.real-app .record-list em{font-style:normal;text-align:right;font-size:13px}.real-app .record-list em small{display:block;color:var(--muted);margin-top:4px}
+.real-app .detail-head{display:flex;justify-content:space-between;gap:24px;padding:22px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
+.real-app .detail-head h2{margin:10px 0 5px}.real-app .detail-head p{margin:0;color:var(--muted)}
+.real-app .money-summary{display:flex;gap:24px;align-items:center}.real-app .money-summary span{display:grid;gap:5px;color:var(--muted);font-size:12px}.real-app .money-summary b{color:var(--text);font-size:20px}
+.real-app .status{display:inline-flex;padding:5px 8px;border-radius:999px;background:#243326;color:#c8ff93;font-size:11px;text-transform:uppercase}
+.real-app .action-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.real-app .reopen-control{grid-template-columns:minmax(220px,1fr) auto;flex:1}
+.real-app .legal-note{padding:14px 18px;border:1px solid #695522;background:#2b2515;color:#f2d989;border-radius:10px;font-size:13px}
+.real-app .ok{color:var(--lime)}.real-app .warn{color:#f2d989}
+@media(max-width:900px){
+  .real-app .metric-grid,.real-app .split-workspace{grid-template-columns:1fr}.real-app .content{padding:20px}.real-app .tr{grid-template-columns:1fr 1fr}
+  .real-app .workflow-fields,.real-app .workflow-fields.three{grid-template-columns:1fr}.real-app .detail-head,.real-app .money-summary{display:grid}
+  .real-app .record-list>a,.real-app .record-row{grid-template-columns:1fr}.real-app .record-list em{text-align:left}.real-app .reopen-control{grid-template-columns:1fr}
+}
