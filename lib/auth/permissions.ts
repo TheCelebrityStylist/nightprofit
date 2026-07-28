@@ -3,4 +3,5 @@ export type Capability =
   | "close.create" | "close.submit" | "close.approve" | "close.reopen"
   | "bookings.manage" | "bookings.discount" | "suppliers.manage" | "invoices.confirm"
   | "events.manage" | "compliance.manage" | "reports.view" | "exports.create"
-  | "evidence.view";
+  | "evidence.view" | "planning.manage" | "planning.respond" | "time.manage"
+  | "time.record" | "actions.manage" | "ai.propose";

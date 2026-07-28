@@ -8,8 +8,9 @@ import { WorkflowForm } from "./workflow-form";
 import "./real-app.css";
 
 const navigation = [
-  ["Command Center", "/app/dashboard"], ["Nightly Close", "/app/close"],
-  ["Group Bookings", "/app/bookings"], ["Suppliers & Contracts", "/app/suppliers"],
+  ["Vandaag", "/app/dashboard"], ["Sales & Demand", "/app/bookings"],
+  ["Plan & Rooster", "/app/planning"], ["Inkoop & Marge", "/app/suppliers"],
+  ["Close & Learn", "/app/close"],
   ["Event Yield", "/app/yield"], ["Team & Compliance", "/app/compliance"],
   ["Alerts & Actions", "/app/alerts"], ["Reports", "/app/reports"],
   ["Integrations", "/app/integrations"], ["Settings", "/app/settings"], ["Billing", "/app/billing"],
@@ -55,6 +56,7 @@ export async function AuthenticatedApp({ path }: { path: string }) {
   else if (path === "/app/close/new") content = <section className="panel"><CloseForm organisationId={organisationId} venues={venues}/></section>;
   else if (path.startsWith("/app/close/")) content = await closeDetail(supabase, organisationId, path.split("/").at(-1) ?? "", venues);
   else if (path === "/app/bookings") content = await bookings(supabase, organisationId, venues);
+  else if (path === "/app/planning") content = await planning(supabase, organisationId, venues);
   else if (path === "/app/suppliers") content = await suppliers(supabase, organisationId);
   else if (path === "/app/yield") content = await eventYield(supabase, organisationId, venues);
   else if (path === "/app/compliance") content = await compliance(supabase, organisationId, venues);
@@ -79,11 +81,16 @@ export async function AuthenticatedApp({ path }: { path: string }) {
 }
 
 async function dashboard(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>, organisationId:string, venues:Venue[], closes:Close[]) {
-  const [{data:deposits},{data:quotes},{data:discrepancies},{data:policies}] = await Promise.all([
+  const today=new Date().toISOString().slice(0,10);
+  const dayStart=`${today}T00:00:00.000Z`,dayEnd=`${today}T23:59:59.999Z`;
+  const [{data:deposits},{data:quotes},{data:discrepancies},{data:policies},{data:intervals},{data:shifts},{data:actions}] = await Promise.all([
     supabase.from("booking_deposits").select("id,status,amount_minor").eq("organisation_id",organisationId).in("status",["created","pending","failed"]),
     supabase.from("booking_quotes").select("id,expires_at,status").eq("organisation_id",organisationId).in("status",["approved","sent"]),
     supabase.from("contract_discrepancies").select("id,status,financial_impact_minor").eq("organisation_id",organisationId).in("status",["open","reviewing","disputed"]),
     supabase.from("compliance_policies").select("id,expires_at").eq("organisation_id",organisationId),
+    supabase.from("demand_forecast_intervals").select("id,venue_id,expected_guests,expected_revenue_minor,required_staff,starts_at,ends_at").eq("organisation_id",organisationId).gte("starts_at",dayStart).lte("starts_at",dayEnd),
+    supabase.from("shifts").select("id,venue_id,staff_id,starts_at,ends_at,break_minutes,hourly_cost_minor,status").eq("organisation_id",organisationId).gte("starts_at",dayStart).lte("starts_at",dayEnd).not("status","in","(cancelled,rejected)"),
+    supabase.from("operating_actions").select("id,title,rationale,severity,status,due_at,expected_impact_minor,venue_id").eq("organisation_id",organisationId).in("status",["open","approved","in_progress"]).order("created_at",{ascending:false}).limit(20),
   ]);
   const unexplained = closes.filter(close=>BigInt(close.difference_minor)!==0n);
   const unapproved = closes.filter(close=>["draft","reopened","submitted"].includes(close.status));
@@ -92,8 +99,21 @@ async function dashboard(supabase:Awaited<ReturnType<typeof createSupabaseServer
   const soon = Date.now()+14*86400000;
   const expiringQuotes = ((quotes??[]) as unknown as {id:string;expires_at:string}[]).filter(row=>new Date(row.expires_at).getTime()<soon);
   const expiringPolicies = ((policies??[]) as unknown as {id:string;expires_at:string|null}[]).filter(row=>row.expires_at&&new Date(row.expires_at).getTime()<soon);
+  const intervalRows=(intervals??[]) as unknown as {id:string;expected_guests:number;expected_revenue_minor:string;required_staff:number}[];
+  const shiftRows=(shifts??[]) as unknown as {id:string;staff_id:string|null;starts_at:string;ends_at:string;break_minutes:number;hourly_cost_minor:string;status:string}[];
+  const expectedGuests=intervalRows.reduce((sum,row)=>sum+row.expected_guests,0);
+  const expectedRevenue=intervalRows.reduce((sum,row)=>sum+BigInt(row.expected_revenue_minor),0n);
+  const scheduledLabor=shiftRows.reduce((sum,row)=>{
+    const minutes=Math.max(0,Math.floor((new Date(row.ends_at).getTime()-new Date(row.starts_at).getTime())/60000)-row.break_minutes);
+    return sum+(BigInt(row.hourly_cost_minor)*BigInt(minutes)+30n)/60n;
+  },0n);
+  const laborBps=expectedRevenue===0n?0n:(scheduledLabor*10000n)/expectedRevenue;
+  const actionRows=(actions??[]) as unknown as {id:string;title:string;rationale:string;severity:string;due_at:string|null;expected_impact_minor:string|null}[];
   return <>
+    <section className="morning-brief"><div><span className="eyebrow">OCHTENDBRIEF · {today}</span><h2>{intervalRows.length?`${expectedGuests} gasten verwacht met ${euro(expectedRevenue)} omzet.`:"Nog geen intervalforecast voor vandaag."}</h2><p>{shiftRows.length?`${shiftRows.length} geplande diensten · ${euro(scheduledLabor)} loonkosten · ${Number(laborBps)/100}% van forecastomzet.`:"Plan diensten vanuit de vraag om bezettingsrisico zichtbaar te maken."}</p></div><Link className="primary" href="/app/planning">Open planning</Link></section>
     <section className="metric-grid">
+      <Metric href="/app/planning" label="Verwachte gasten vandaag" value={String(expectedGuests)} detail={`${intervalRows.length} vraaginterval(len)`}/>
+      <Metric href="/app/planning" label="Geplande loonkosten" value={euro(scheduledLabor)} detail={`${Number(laborBps)/100}% van forecastomzet`}/>
       <Metric href="/app/close" label="Onverklaard closeverschil" value={euro(unexplained.reduce((sum,row)=>sum+BigInt(row.difference_minor),0n))} detail={`${unexplained.length} afsluiting(en)`}/>
       <Metric href="/app/close" label="Niet goedgekeurd" value={String(unapproved.length)} detail="Concept, heropend of ingediend"/>
       <Metric href="/app/bookings" label="Openstaande deposito's" value={euro(depositRows.reduce((sum,row)=>sum+BigInt(row.amount_minor),0n))} detail={`${depositRows.length} actie(s)`}/>
@@ -101,14 +121,67 @@ async function dashboard(supabase:Awaited<ReturnType<typeof createSupabaseServer
       <Metric href="/app/suppliers" label="Open afwijkingen" value={String(discrepancyRows.length)} detail={euro(discrepancyRows.reduce((sum,row)=>sum+BigInt(row.financial_impact_minor),0n))}/>
       <Metric href="/app/compliance" label="Beleid verloopt binnenkort" value={String(expiringPolicies.length)} detail="Controleer vervanging en toewijzing"/>
     </section>
-    <section className="panel"><header><div><h3>Actiewachtrij</h3><p>Rechtstreeks afgeleid van records die aandacht vereisen.</p></div></header>
-      {!unapproved.length&&!depositRows.length&&!discrepancyRows.length?<div className="empty-state"><h3>Geen open acties</h3><p>Voeg echte operationele records toe via de modules om de wachtrij te vullen.</p></div>:
+    <section className="panel"><header><div><h3>Prioritaire actiewachtrij</h3><p>Iedere actie heeft een reden, status, deadline en bewijscontext.</p></div></header>
+      {!unapproved.length&&!depositRows.length&&!discrepancyRows.length&&!actionRows.length?<div className="empty-state"><h3>Geen open acties</h3><p>Voeg forecast-, boekings- of closegegevens toe om beslisregels te activeren.</p></div>:
       <div className="record-list">
+        {actionRows.map(row=><Link key={row.id} href="/app/alerts"><b><span className={`severity ${row.severity}`}>{row.severity}</span> {row.title}</b><span>{row.rationale}</span><em>{row.expected_impact_minor?euro(row.expected_impact_minor):"Impact niet gekwantificeerd"}{row.due_at?<small>Voor {date(row.due_at)}</small>:null}</em></Link>)}
         {unapproved.slice(0,5).map(row=><Link key={row.id} href={`/app/close/${row.id}`}><b>Close {row.trading_date}</b><span>{row.status} · {venues.find(v=>v.id===row.venue_id)?.name}</span><em>Open →</em></Link>)}
         {depositRows.slice(0,3).map(row=><Link key={row.id} href="/app/bookings"><b>Boekingsdeposito</b><span>{row.status} · {euro(row.amount_minor)}</span><em>Open →</em></Link>)}
       </div>}
     </section>
   </>;
+}
+
+async function planning(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>, organisationId:string, venues:Venue[]) {
+  const [{data:departmentData},{data:roleData},{data:staffData},{data:intervalData},{data:shiftData},{data:proposalData}]=await Promise.all([
+    supabase.from("departments").select("id,venue_id,name").eq("organisation_id",organisationId).order("name"),
+    supabase.from("operational_roles").select("id,department_id,name,hourly_cost_minor,minimum_staff,guests_per_staff").eq("organisation_id",organisationId).order("name"),
+    supabase.from("staff_profiles").select("id,full_name,role_name").eq("organisation_id",organisationId).order("full_name"),
+    supabase.from("demand_forecast_intervals").select("id,venue_id,starts_at,ends_at,expected_guests,expected_revenue_minor,required_staff").eq("organisation_id",organisationId).order("starts_at",{ascending:false}).limit(30),
+    supabase.from("shifts").select("id,venue_id,department_id,role_id,staff_id,starts_at,ends_at,break_minutes,hourly_cost_minor,status").eq("organisation_id",organisationId).order("starts_at",{ascending:false}).limit(50),
+    supabase.from("ai_proposals").select("id,action_type,rationale,proposed_change,missing_data,confidence_basis,approval_status,execution_status,created_at").eq("organisation_id",organisationId).eq("action_type","schedule_proposal").order("created_at",{ascending:false}).limit(10),
+  ]);
+  const departments=(departmentData??[]) as unknown as {id:string;venue_id:string;name:string}[];
+  const roles=(roleData??[]) as unknown as {id:string;department_id:string;name:string;hourly_cost_minor:string;minimum_staff:number;guests_per_staff:number}[];
+  const staff=(staffData??[]) as unknown as {id:string;full_name:string;role_name:string}[];
+  const intervals=(intervalData??[]) as unknown as {id:string;venue_id:string;starts_at:string;ends_at:string;expected_guests:number;expected_revenue_minor:string;required_staff:number}[];
+  const shifts=(shiftData??[]) as unknown as {id:string;venue_id:string;department_id:string;role_id:string;staff_id:string|null;starts_at:string;ends_at:string;break_minutes:number;hourly_cost_minor:string;status:string}[];
+  const proposals=(proposalData??[]) as unknown as {id:string;rationale:string;missing_data:string[];confidence_basis:string;approval_status:string;execution_status:string;created_at:string}[];
+  const departmentOptions=departments.map(row=>({label:row.name,value:row.id}));
+  const roleOptions=roles.map(row=>({label:row.name,value:row.id}));
+  const staffOptions=[{label:"Open dienst",value:"open"},...staff.map(row=>({label:`${row.full_name} · ${row.role_name}`,value:row.id}))];
+  return <div className="workflow-stack">
+    <section className="connected-flow"><span>Vraag</span><b>→</b><span>Forecast</span><b>→</b><span>Rooster</span><b>→</b><span>Publicatie</span><b>→</b><span>Uren</span><b>→</b><span>Close & Learn</span></section>
+    <div className="split-workspace">
+      <WorkflowForm endpoint="/api/planning" organisationId={organisationId} workflow="forecast" title="Vraaginterval plannen" submitLabel="Forecast opslaan" fields={[
+        {name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues)},{name:"tradingDate",label:"Handelsdatum",type:"date",required:true},
+        {name:"startsAt",label:"Interval start",type:"datetime-local",required:true},{name:"endsAt",label:"Interval einde",type:"datetime-local",required:true},
+        {name:"expectedGuests",label:"Verwachte gasten",type:"number",required:true},{name:"expectedRevenue",label:"Verwachte omzet (€)",required:true},
+        {name:"minimumStaff",label:"Minimale bezetting",type:"number",required:true},{name:"guestsPerStaff",label:"Gasten per medewerker",type:"number",required:true},
+        {name:"managerNote",label:"Aannames en context",type:"textarea"},
+      ]}/>
+      <RecordPanel title="Vraag per tijdsblok" empty="Nog geen intervalforecast.">{intervals.map(row=><div className="record-row" key={row.id}><b>{new Date(row.starts_at).toLocaleString("nl-NL",{dateStyle:"short",timeStyle:"short"})}</b><span>{row.expected_guests} gasten · {row.required_staff} medewerkers vereist</span><em>{euro(row.expected_revenue_minor)}</em></div>)}</RecordPanel>
+    </div>
+    {!departments.length?<div className="split-workspace">
+      <WorkflowForm endpoint="/api/planning" organisationId={organisationId} workflow="department" title="Eerste afdeling" submitLabel="Afdeling toevoegen" fields={[{name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues)},{name:"name",label:"Afdelingsnaam",required:true,placeholder:"Bar, keuken, bediening…"}]}/>
+      <div className="legal-note">Maak eerst een afdeling aan. Daarna kun je operationele rollen en diensten plannen.</div>
+    </div>:!roles.length?<WorkflowForm endpoint="/api/planning" organisationId={organisationId} workflow="role" title="Eerste operationele rol" submitLabel="Rol toevoegen" fields={[
+      {name:"departmentId",label:"Afdeling",type:"select",required:true,options:departmentOptions},{name:"name",label:"Rolnaam",required:true},{name:"hourlyCost",label:"All-in uurkosten (€)",required:true},
+      {name:"minimumStaff",label:"Minimale bezetting",type:"number",required:true},{name:"guestsPerStaff",label:"Gasten per medewerker",type:"number",required:true},
+    ]}/>:<div className="split-workspace">
+      <WorkflowForm endpoint="/api/planning" organisationId={organisationId} workflow="shift" title="Conceptdienst" submitLabel="Dienst toevoegen" fields={[
+        {name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues)},{name:"departmentId",label:"Afdeling",type:"select",required:true,options:departmentOptions},
+        {name:"roleId",label:"Rol",type:"select",required:true,options:roleOptions},{name:"staffId",label:"Medewerker",type:"select",required:true,options:staffOptions},
+        {name:"startsAt",label:"Start",type:"datetime-local",required:true},{name:"endsAt",label:"Einde",type:"datetime-local",required:true},{name:"breakMinutes",label:"Pauze (min)",type:"number",required:true},{name:"hourlyCost",label:"Uurkosten (€)",required:true},
+      ]}/>
+      <RecordPanel title="Rooster · concept en gepubliceerd" empty="Nog geen diensten.">{shifts.map(row=><div className="record-row" key={row.id}><b>{staff.find(person=>person.id===row.staff_id)?.full_name||"Open dienst"} · {roles.find(role=>role.id===row.role_id)?.name||"Rol"}</b><span>{new Date(row.starts_at).toLocaleString("nl-NL",{dateStyle:"short",timeStyle:"short"})}–{new Date(row.ends_at).toLocaleTimeString("nl-NL",{hour:"2-digit",minute:"2-digit"})}</span><em>{row.status}</em></div>)}</RecordPanel>
+    </div>}
+    <div className="split-workspace">
+      <WorkflowForm endpoint="/api/planning" organisationId={organisationId} workflow="publish" title="Rooster publiceren" submitLabel="Gecontroleerd publiceren" fields={[{name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues)},{name:"startsAt",label:"Periode start",type:"datetime-local",required:true},{name:"endsAt",label:"Periode einde",type:"datetime-local",required:true}]}/>
+      <WorkflowForm endpoint="/api/planning" organisationId={organisationId} workflow="proposal" title="Uitlegbare roostercontrole" submitLabel="Voorstel genereren" fields={[{name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues)},{name:"tradingDate",label:"Handelsdatum",type:"date",required:true}]}/>
+    </div>
+    <RecordPanel title="Governed voorstellen" empty="Nog geen planningvoorstellen.">{proposals.map(row=><div className="record-row" key={row.id}><b>{row.approval_status} · {date(row.created_at)}</b><span>{row.rationale}<small>{row.confidence_basis}</small></span><em>{row.execution_status}{row.missing_data.length?<small>{row.missing_data.join(" ")}</small>:null}</em></div>)}</RecordPanel>
+  </div>;
 }
 
 function Metric({href,label,value,detail}:{href:string;label:string;value:string;detail:string}) { return <Link href={href} className="metric"><span>{label}</span><strong>{value}</strong><small>{detail} →</small></Link>; }

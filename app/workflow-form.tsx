@@ -18,12 +18,14 @@ export function WorkflowForm({
   title,
   submitLabel,
   fields,
+  endpoint = "/api/workflows",
 }: {
   organisationId: string;
   workflow: string;
   title: string;
   submitLabel: string;
   fields: Field[];
+  endpoint?: string;
 }) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
@@ -35,10 +37,10 @@ export function WorkflowForm({
     setError("");
     setSuccess("");
     const values = Object.fromEntries(formData.entries());
-    const response = await fetch("/api/workflows", {
+    const response = await fetch(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ workflow, organisationId, values }),
+      body: JSON.stringify(endpoint === "/api/planning" ? { action: workflow, organisationId, values } : { workflow, organisationId, values }),
     });
     const result = (await response.json()) as { error?: string; message?: string };
     setPending(false);

@@ -1,5 +1,5 @@
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
-export type MemberRole = "owner" | "administrator" | "manager" | "venue_manager" | "bookkeeper" | "finance" | "bookings" | "procurement" | "compliance_manager" | "viewer";
+export type MemberRole = "owner" | "administrator" | "manager" | "venue_manager" | "bookkeeper" | "finance" | "bookings" | "procurement" | "compliance_manager" | "viewer" | "employee";
 export interface Database {
   public: {
     Tables: {
@@ -26,12 +26,26 @@ export interface Database {
       booking_quotes: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: never; Relationships: [] };
       profit_recovery_ledger: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
       integration_connections: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      departments: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      operational_roles: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      staff_role_qualifications: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      staff_availability: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      staff_absences: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      demand_forecasts: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      demand_forecast_intervals: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      shifts: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      shift_responses: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      time_records: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      operating_actions: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      ai_proposals: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
     };
     Views: Record<string,never>;
     Functions: {
       create_organisation: { Args: { org_name:string; venue_name:string }; Returns:string };
       has_capability: { Args: { target_organisation_id:string; target_venue_id:string|null; required_capability:string }; Returns:boolean };
       transition_close: { Args: { target_close_id:string; target_status:string; reason?:string|null }; Returns:Database["public"]["Tables"]["closing_sessions"]["Row"] };
+      create_demand_plan: { Args: { target_organisation_id:string;target_venue_id:string;target_trading_date:string;interval_inputs:Json;target_assumptions?:Json }; Returns:Record<string,unknown> };
+      publish_roster: { Args: { target_organisation_id:string;target_venue_id:string;window_start:string;window_end:string }; Returns:number };
     };
     Enums: { member_role: MemberRole };
     CompositeTypes: Record<string,never>;
