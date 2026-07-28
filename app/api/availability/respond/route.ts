@@ -15,7 +15,8 @@ export async function POST(request:Request){
     const env=serverEnv();
     if(!env.NEXT_PUBLIC_SUPABASE_URL||!env.NEXT_PUBLIC_SUPABASE_ANON_KEY)throw new Error("CONFIGURATION_REQUIRED");
     const supabase=createClient<Database>(env.NEXT_PUBLIC_SUPABASE_URL,env.NEXT_PUBLIC_SUPABASE_ANON_KEY,{auth:{persistSession:false,autoRefreshToken:false}});
-    const {data,error}=await supabase.rpc("submit_availability_request",{target_token_hash:hashAvailabilityToken(input.token),entry_inputs:entries as unknown as Json});
+    const entryInputs=entries.map(row=>({starts_at:row.startsAt,ends_at:row.endsAt,availability:row.availability,note:row.note||""}));
+    const {data,error}=await supabase.rpc("submit_availability_request",{target_token_hash:hashAvailabilityToken(input.token),entry_inputs:entryInputs as unknown as Json});
     if(error)throw error;
     return NextResponse.json({message:"Je beschikbaarheid is bevestigd.",result:data});
   }catch(error){
