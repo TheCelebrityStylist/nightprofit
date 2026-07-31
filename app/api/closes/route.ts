@@ -18,7 +18,7 @@ export async function POST(request:Request){
       organisation_id:input.organisationId,venue_id:input.venueId,trading_date:input.tradingDate,
       created_by:membership.user.id,status:"draft",
     }).select("id").single();
-    if(error||!data)return NextResponse.json({error:error?.code==="23505"?"Voor deze handelsdatum bestaat al een afsluiting.":"Afsluiting kon niet worden aangemaakt."},{status:400});
+    if(error||!data){const duplicate=error?.code==="23505";return NextResponse.json({code:duplicate?"duplicate":"create_failed",error:duplicate?"Voor deze handelsdatum bestaat al een afsluiting.":"Afsluiting kon niet worden aangemaakt."},{status:400});}
     await supabase.from("audit_logs").insert({
       organisation_id:input.organisationId,actor_id:membership.user.id,action:"close.created",
       entity_type:"closing_session",entity_id:data.id,
@@ -26,5 +26,5 @@ export async function POST(request:Request){
       correlation_id:crypto.randomUUID(),source:"api",
     });
     return NextResponse.json({id:data.id},{status:201});
-  }catch{return NextResponse.json({error:"Ongeldige of niet-toegestane aanvraag."},{status:400});}
+  }catch{return NextResponse.json({code:"invalid",error:"Ongeldige of niet-toegestane aanvraag."},{status:400});}
 }

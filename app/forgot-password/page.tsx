@@ -1,2 +1,3 @@
 import { AuthForm } from "../auth-form";
-export default function ForgotPage(){return <AuthForm mode="forgot"/>}
+import { getLocale } from "../../lib/i18n/server";
+export default async function ForgotPage(){return <AuthForm mode="forgot" locale={await getLocale()}/>}

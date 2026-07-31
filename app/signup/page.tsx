@@ -1,2 +1,3 @@
 import { AuthForm } from "../auth-form";
-export default function SignupPage(){return <AuthForm mode="signup"/>}
+import { getLocale } from "../../lib/i18n/server";
+export default async function SignupPage(){return <AuthForm mode="signup" locale={await getLocale()}/>}

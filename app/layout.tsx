@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { getLocale } from "../lib/i18n/server";
 import "./globals.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
@@ -12,6 +13,7 @@ export const metadata: Metadata = {
   twitter: { card: "summary_large_image", title: "NightProfit", description: "Evidence-backed profit control.", images: ["/og.png"] },
 };
 
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="nl"><body className={`${geistSans.variable} ${geistMono.variable}`}>{children}</body></html>;
+export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  const locale = await getLocale();
+  return <html lang={locale}><body className={`${geistSans.variable} ${geistMono.variable}`}>{children}</body></html>;
 }

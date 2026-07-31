@@ -1,2 +1,3 @@
 import { AuthForm } from "../auth-form";
-export default function UpdatePasswordPage(){return <AuthForm mode="update"/>}
+import { getLocale } from "../../lib/i18n/server";
+export default async function UpdatePasswordPage(){return <AuthForm mode="update" locale={await getLocale()}/>}

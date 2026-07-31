@@ -25,13 +25,14 @@ Status is evidence-based. “Implemented” never means credential-tested.
 | Data export/deletion/retention/AI control | Partial | Schema complete | Remote pending | Migration and settings | Legal owner decisions |
 | Scheduled briefing/email | Incomplete | Boundary only | No | Job tables | Resend/OpenAI/Cron |
 | Real authenticated shell | Synthetic app data | Implemented for `/app`; `/demo` remains synthetic | Build verified; deployed auth acceptance pending | `app/authenticated-app.tsx` | Seeded test user |
+| Authenticated Dutch/English parity | Dutch-only authenticated screens | Typed `lib/i18n` dictionary, cookie-persisted locale, `<html lang>` follows locale, switcher in `/app`, login/signup/reset/onboarding/close translated, close API returns stable error codes | Yes — key-parity + rendered NL/EN tests | `lib/i18n/*`, `app/locale-switcher.tsx`, `tests/i18n-parity.test.ts`, `tests/rendered-html.test.mjs` | None |
 | Deployed browser acceptance matrix | Incomplete | No | Pending deploy and test identities | This matrix | Seeded test users |
 
 ## Current verification
 
 - `npm ci`: passed (local Node 22.12 emits an engine warning; project requires 22.13+).
-- `npm run verify`: passed: lint, typecheck, 23 tests and production build.
-- `npm run test:e2e`: 2 rendered-route tests passed.
+- `npm run verify`: passed: lint, typecheck, 29 tests (6 credential-dependent skipped) and production build.
+- `npm run test:e2e`: 4 rendered-route tests passed (public, demo, and NL/EN sign-in).
 - `npm audit --omit=dev`: 0 production vulnerabilities.
 - Remote RLS: 6 cases skipped, therefore not counted as passed.
 
