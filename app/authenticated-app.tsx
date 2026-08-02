@@ -1,7 +1,14 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
 import { createSupabaseServerClient } from "../lib/supabase/server";
-import { authIntlLocale, authMessage, normalizeAuthLocale, type AuthLocale, type AuthMessageKey } from "../lib/i18n/authenticated";
+import {
+  authEnumLabel,
+  authIntlLocale,
+  authMessage,
+  normalizeAuthLocale,
+  type AuthLocale,
+  type AuthMessageKey,
+} from "../lib/i18n/authenticated";
 import { AuthLocaleProvider, AuthLocaleSwitch } from "./auth-locale";
 import { AuthForm } from "./auth-form";
 import { CloseForm } from "./close-form";
@@ -16,419 +23,2653 @@ import { ReconciliationWorkspace } from "./reconciliation-workspace";
 import "./real-app.css";
 
 const navigation = [
-  ["nav.today", "/app/dashboard"], ["nav.sales", "/app/bookings"],
-  ["nav.planning", "/app/planning"], ["nav.inventory", "/app/inventory"], ["nav.products", "/app/products"], ["nav.suppliers", "/app/suppliers"],
-  ["nav.myWork", "/app/my-work"], ["nav.posImport", "/app/imports/pos"], ["nav.posMapping", "/app/mappings/pos"], ["nav.reconcile", "/app/reconcile"],
+  ["nav.today", "/app/dashboard"],
+  ["nav.sales", "/app/bookings"],
+  ["nav.planning", "/app/planning"],
+  ["nav.inventory", "/app/inventory"],
+  ["nav.products", "/app/products"],
+  ["nav.suppliers", "/app/suppliers"],
+  ["nav.myWork", "/app/my-work"],
+  ["nav.posImport", "/app/imports/pos"],
+  ["nav.posMapping", "/app/mappings/pos"],
+  ["nav.reconcile", "/app/reconcile"],
   ["nav.close", "/app/close"],
-  ["nav.yield", "/app/yield"], ["nav.compliance", "/app/compliance"],
-  ["nav.alerts", "/app/alerts"], ["nav.reports", "/app/reports"],
-  ["nav.integrations", "/app/integrations"], ["nav.settings", "/app/settings"], ["nav.billing", "/app/billing"],
+  ["nav.yield", "/app/yield"],
+  ["nav.compliance", "/app/compliance"],
+  ["nav.alerts", "/app/alerts"],
+  ["nav.reports", "/app/reports"],
+  ["nav.integrations", "/app/integrations"],
+  ["nav.settings", "/app/settings"],
+  ["nav.billing", "/app/billing"],
 ] as const;
 
-type Venue = {id:string;name:string;timezone:string};
-type Close = {id:string;venue_id:string;trading_date:string;status:string;version:number;expected_total_minor:string;accounted_total_minor:string;difference_minor:string};
-type Inquiry = {id:string;venue_id:string;status:string;preferred_start:string;group_size:number;contact_name:string;occasion:string|null;budget_minor:string|null};
-type Supplier = {id:string;name:string;email:string|null};
-type Staff = {id:string;full_name:string;role_name:string;onboarding_status:string;preferred_language:string};
-type Scenario = {id:string;venue_id:string;event_id:string;scenario:string;revenue_low_minor:string;contribution_minor:string;break_even_revenue_minor:string;missing_data:string[];created_at:string};
-type EventRow = {id:string;name:string;starts_at:string};
-type Incident = {id:string;venue_id:string;occurred_at:string;category:string;status:string;factual_record:string};
+type Venue = { id: string; name: string; timezone: string };
+type Close = {
+  id: string;
+  venue_id: string;
+  trading_date: string;
+  status: string;
+  version: number;
+  expected_total_minor: string;
+  accounted_total_minor: string;
+  difference_minor: string;
+};
+type Inquiry = {
+  id: string;
+  venue_id: string;
+  status: string;
+  preferred_start: string;
+  group_size: number;
+  contact_name: string;
+  occasion: string | null;
+  budget_minor: string | null;
+};
+type Supplier = { id: string; name: string; email: string | null };
+type Staff = {
+  id: string;
+  full_name: string;
+  role_name: string;
+  onboarding_status: string;
+  preferred_language: string;
+};
+type Scenario = {
+  id: string;
+  venue_id: string;
+  event_id: string;
+  scenario: string;
+  revenue_low_minor: string;
+  contribution_minor: string;
+  break_even_revenue_minor: string;
+  missing_data: string[];
+  created_at: string;
+};
+type EventRow = { id: string; name: string; starts_at: string };
+type IncidentRow = {
+  id: string;
+  venue_id: string;
+  occurred_at: string;
+  category: string;
+  status: string;
+  factual_record: string;
+};
 
-const euro = (minor:string|number|bigint|null|undefined, locale:AuthLocale="nl") => new Intl.NumberFormat(authIntlLocale(locale),{style:"currency",currency:"EUR"}).format(Number(BigInt(minor??0))/100);
-const date = (value:string, locale:AuthLocale="nl") => new Intl.DateTimeFormat(authIntlLocale(locale),{dateStyle:"medium"}).format(new Date(value));
-const venueOptions = (venues:Venue[]) => venues.map((venue)=>({label:venue.name,value:venue.id}));
+const euro = (
+  minor: string | number | bigint | null | undefined,
+  locale: AuthLocale = "nl",
+) =>
+  new Intl.NumberFormat(authIntlLocale(locale), {
+    style: "currency",
+    currency: "EUR",
+  }).format(Number(BigInt(minor ?? 0)) / 100);
+const date = (value: string, locale: AuthLocale = "nl") =>
+  new Intl.DateTimeFormat(authIntlLocale(locale), {
+    dateStyle: "medium",
+  }).format(new Date(value));
+const venueOptions = (venues: Venue[]) =>
+  venues.map((venue) => ({ label: venue.name, value: venue.id }));
 
 export async function AuthenticatedApp({ path }: { path: string }) {
-  const locale=normalizeAuthLocale((await cookies()).get("nightprofit_locale")?.value);
-  return <AuthLocaleProvider initialLocale={locale}><AuthenticatedAppContent path={path} locale={locale}/></AuthLocaleProvider>;
+  const locale = normalizeAuthLocale(
+    (await cookies()).get("nightprofit_locale")?.value,
+  );
+  return (
+    <AuthLocaleProvider initialLocale={locale}>
+      <AuthenticatedAppContent path={path} locale={locale} />
+    </AuthLocaleProvider>
+  );
 }
 
-async function AuthenticatedAppContent({ path, locale }: { path: string; locale:AuthLocale }) {
-  const t=(key:AuthMessageKey)=>authMessage(locale,key);
-  const supabase = await createSupabaseServerClient().catch(()=>null);
-  if(!supabase)return <AuthForm mode="login" locale={locale}/>;
-  const authResult = await supabase.auth.getUser().catch(()=>null);
-  if(!authResult)return <AuthForm mode="login" locale={locale}/>;
-  const { data: { user }, error: authError } = authResult;
-  if (authError || !user) return <AuthForm mode="login" locale={locale}/>;
-  const { data: memberships, error: membershipError } = await supabase.from("organisation_members").select("organisation_id,role").eq("user_id", user.id).eq("active",true);
+async function AuthenticatedAppContent({
+  path,
+  locale,
+}: {
+  path: string;
+  locale: AuthLocale;
+}) {
+  const t = (key: AuthMessageKey) => authMessage(locale, key);
+  const supabase = await createSupabaseServerClient().catch(() => null);
+  if (!supabase) return <AuthForm mode="login" locale={locale} />;
+  const authResult = await supabase.auth.getUser().catch(() => null);
+  if (!authResult) return <AuthForm mode="login" locale={locale} />;
+  const {
+    data: { user },
+    error: authError,
+  } = authResult;
+  if (authError || !user) return <AuthForm mode="login" locale={locale} />;
+  const { data: memberships, error: membershipError } = await supabase
+    .from("organisation_members")
+    .select("organisation_id,role")
+    .eq("user_id", user.id)
+    .eq("active", true);
   if (membershipError) throw new Error("Membership lookup failed");
-  if (!memberships?.length) return <OnboardingForm/>;
+  if (!memberships?.length) return <OnboardingForm />;
   const membership = memberships[0];
   const organisationId = membership.organisation_id;
-  const [{ data: organisation }, { data: venuesData }, { data: closesData }] = await Promise.all([
-    supabase.from("organisations").select("id,name,currency,timezone").eq("id", organisationId).single(),
-    supabase.from("venues").select("id,name,timezone").eq("organisation_id", organisationId).order("name"),
-    supabase.from("closing_sessions").select("id,venue_id,trading_date,status,version,expected_total_minor,accounted_total_minor,difference_minor").eq("organisation_id", organisationId).order("trading_date",{ascending:false}).limit(50),
-  ]);
-  if (!organisation) return <OnboardingForm/>;
+  const [{ data: organisation }, { data: venuesData }, { data: closesData }] =
+    await Promise.all([
+      supabase
+        .from("organisations")
+        .select("id,name,currency,timezone")
+        .eq("id", organisationId)
+        .single(),
+      supabase
+        .from("venues")
+        .select("id,name,timezone")
+        .eq("organisation_id", organisationId)
+        .order("name"),
+      supabase
+        .from("closing_sessions")
+        .select(
+          "id,venue_id,trading_date,status,version,expected_total_minor,accounted_total_minor,difference_minor",
+        )
+        .eq("organisation_id", organisationId)
+        .order("trading_date", { ascending: false })
+        .limit(50),
+    ]);
+  if (!organisation) return <OnboardingForm />;
   const venues = (venuesData ?? []) as Venue[];
   const closes = (closesData ?? []) as Close[];
-  const activeKey = navigation.find(([, href]) => path===href)?.[0] ?? (
-    path.startsWith("/app/close/") ? "nav.nightlyClose" : "nav.command"
-  );
-  const activeLabel=t(activeKey);
+  const activeKey =
+    navigation.find(([, href]) => path === href)?.[0] ??
+    (path.startsWith("/app/close/") ? "nav.nightlyClose" : "nav.command");
+  const activeLabel = t(activeKey);
 
   let content: React.ReactNode;
-  if (path === "/app/dashboard") content = await dashboard(supabase, organisationId, venues, closes);
-  else if (path === "/app/close") content = closeList(venues, closes);
-  else if (path === "/app/close/new") content = <section className="panel"><CloseForm organisationId={organisationId} venues={venues}/></section>;
-  else if (path.startsWith("/app/close/")) content = await closeDetail(supabase, organisationId, path.split("/").at(-1) ?? "", venues);
-  else if (path === "/app/bookings") content = await bookings(supabase, organisationId, venues);
-  else if (path === "/app/planning") content = await planning(supabase, organisationId, venues);
-  else if (path === "/app/my-work") content = await myWork(supabase, organisationId, venues, user.id);
-  else if (path === "/app/suppliers") content = await suppliers(supabase, organisationId);
-  else if (path === "/app/products") content = await productsAndRecipes(supabase, organisationId, venues);
-  else if (path === "/app/imports/pos") content = <PosImportWorkspace organisationId={organisationId} venues={venues}/>;
-  else if (path === "/app/mappings/pos") content = await posMappings(supabase,organisationId,venues);
-  else if (path === "/app/inventory") content = await inventoryCounts(supabase,organisationId,venues);
-  else if (path === "/app/reconcile") content = await reconciliationWorkspace(supabase,organisationId,venues);
-  else if (path === "/app/yield") content = await eventYield(supabase, organisationId, venues);
-  else if (path === "/app/compliance") content = await compliance(supabase, organisationId, venues);
-  else if (path === "/app/integrations") content = integrations();
-  else content = <HonestEmpty title={activeLabel}/>;
+  if (path === "/app/dashboard")
+    content = await dashboard(supabase, organisationId, venues, closes, locale);
+  else if (path === "/app/close") content = closeList(venues, closes, locale);
+  else if (path === "/app/close/new")
+    content = (
+      <section className="panel">
+        <CloseForm organisationId={organisationId} venues={venues} />
+      </section>
+    );
+  else if (path.startsWith("/app/close/"))
+    content = await closeDetail(
+      supabase,
+      organisationId,
+      path.split("/").at(-1) ?? "",
+      venues,
+      locale,
+    );
+  else if (path === "/app/bookings")
+    content = await bookings(supabase, organisationId, venues, locale);
+  else if (path === "/app/planning")
+    content = await planning(supabase, organisationId, venues, locale);
+  else if (path === "/app/my-work")
+    content = await myWork(supabase, organisationId, venues, user.id, locale);
+  else if (path === "/app/suppliers")
+    content = await suppliers(supabase, organisationId, locale);
+  else if (path === "/app/products")
+    content = await productsAndRecipes(supabase, organisationId, venues, locale);
+  else if (path === "/app/imports/pos")
+    content = (
+      <PosImportWorkspace organisationId={organisationId} venues={venues} />
+    );
+  else if (path === "/app/mappings/pos")
+    content = await posMappings(supabase, organisationId, venues, locale);
+  else if (path === "/app/inventory")
+    content = await inventoryCounts(supabase, organisationId, venues);
+  else if (path === "/app/reconcile")
+    content = await reconciliationWorkspace(supabase, organisationId, venues);
+  else if (path === "/app/yield")
+    content = await eventYield(supabase, organisationId, venues, locale);
+  else if (path === "/app/compliance")
+    content = await compliance(supabase, organisationId, venues, locale);
+  else if (path === "/app/integrations") content = integrations(locale);
+  else content = <HonestEmpty title={activeLabel} locale={locale} />;
 
-  return <div className="app-shell real-app">
-    <aside>
-      <Link href="/" className="brand"><span className="logo">N</span><b>NightProfit</b></Link>
-      <div className="venue" aria-label={t("shell.currentOrganisation")}><span>{organisation.name.slice(0,2).toUpperCase()}</span><div><b>{organisation.name}</b><small>{venues.length} {t("shell.venues")} · {organisation.currency}</small></div></div>
-      <nav aria-label="NightProfit">{navigation.map(([key,href])=><Link key={href} href={href} className={path===href?"active":""}>{t(key)}</Link>)}</nav>
-      <div className="aside-foot"><span>{t("shell.secureData")}</span><p>{membership.role}</p></div>
-    </aside>
-    <main className="app-main">
-      <header className="topbar"><div><b>{organisation.name}</b><small>{venues.map((venue)=>venue.name).join(" · ")||t("shell.noVenue")}</small></div><div className="topbar-actions"><AuthLocaleSwitch/><form action="/api/auth/logout" method="post"><button className="ghost">{t("shell.logout")}</button></form></div></header>
-      <div className="content">
-        <section className="hero-row"><div><div className="eyebrow">{t("shell.live")}</div><h1>{activeLabel}</h1><p>{t("shell.scope")}</p></div>{path==="/app/close"&&<Link className="primary" href="/app/close/new">{t("shell.newClose")}</Link>}</section>
-        {content}
-      </div>
-    </main>
-  </div>;
+  return (
+    <div className="app-shell real-app">
+      <aside>
+        <Link href="/" className="brand">
+          <span className="logo">N</span>
+          <b>NightProfit</b>
+        </Link>
+        <div className="venue" aria-label={t("shell.currentOrganisation")}>
+          <span>{organisation.name.slice(0, 2).toUpperCase()}</span>
+          <div>
+            <b>{organisation.name}</b>
+            <small>
+              {venues.length} {t("shell.venues")} · {organisation.currency}
+            </small>
+          </div>
+        </div>
+        <nav aria-label="NightProfit">
+          {navigation.map(([key, href]) => (
+            <Link
+              key={href}
+              href={href}
+              className={path === href ? "active" : ""}
+            >
+              {t(key)}
+            </Link>
+          ))}
+        </nav>
+        <div className="aside-foot">
+          <span>{t("shell.secureData")}</span>
+          <p>{authEnumLabel(locale, membership.role)}</p>
+        </div>
+      </aside>
+      <main className="app-main">
+        <header className="topbar">
+          <div>
+            <b>{organisation.name}</b>
+            <small>
+              {venues.map((venue) => venue.name).join(" · ") ||
+                t("shell.noVenue")}
+            </small>
+          </div>
+          <div className="topbar-actions">
+            <AuthLocaleSwitch />
+            <form action="/api/auth/logout" method="post">
+              <button className="ghost">{t("shell.logout")}</button>
+            </form>
+          </div>
+        </header>
+        <div className="content">
+          <section className="hero-row">
+            <div>
+              <div className="eyebrow">{t("shell.live")}</div>
+              <h1>{activeLabel}</h1>
+              <p>{t("shell.scope")}</p>
+            </div>
+            {path === "/app/close" && (
+              <Link className="primary" href="/app/close/new">
+                {t("shell.newClose")}
+              </Link>
+            )}
+          </section>
+          {content}
+        </div>
+      </main>
+    </div>
+  );
 }
 
-async function posMappings(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>,organisationId:string,venues:Venue[]){
-  if(!venues.length)return <HonestEmpty title="POS Mapping"/>;
-  const [{data:salesData},{data:itemData},{data:mappingData}]=await Promise.all([
-    supabase.from("normalized_sales").select("venue_id,pos_product_name,pos_category,quantity,gross_minor").eq("organisation_id",organisationId),
-    supabase.from("menu_items").select("id,venue_id,name").eq("organisation_id",organisationId).order("name"),
-    supabase.from("source_mappings").select("venue_id,source_value,target_id,status").eq("organisation_id",organisationId).eq("connector_key","pos_csv").eq("source_type","product").eq("status","confirmed"),
-  ]);
-  const sales=(salesData??[]) as unknown as {venue_id:string;pos_product_name:string;pos_category:string|null;quantity:string;gross_minor:string}[];
-  const menuItems=(itemData??[]) as unknown as {id:string;venue_id:string|null;name:string}[];
-  const mappings=(mappingData??[]) as unknown as {venue_id:string;source_value:string;target_id:string}[];
-  const normalize=(value:string)=>value.toLocaleLowerCase("nl-NL").replace(/[^a-z0-9]+/g," ").trim();
-  const workspaces=venues.map(venue=>{
-    const venueItems=menuItems.filter(item=>item.venue_id===venue.id);
-    const venueMappings=mappings.filter(mapping=>mapping.venue_id===venue.id);
-    const grouped=new Map<string,{category:string|null;quantity:number;revenue:bigint}>();
-    sales.filter(row=>row.venue_id===venue.id).forEach(row=>{const current=grouped.get(row.pos_product_name)??{category:row.pos_category,quantity:0,revenue:0n};current.quantity+=Number(row.quantity);current.revenue+=BigInt(row.gross_minor);grouped.set(row.pos_product_name,current);});
-    const rows=[...grouped.entries()].map(([sourceValue,totals])=>{const suggestion=venueItems.find(item=>normalize(item.name)===normalize(sourceValue))??null;return {sourceValue,category:totals.category,quantity:String(totals.quantity),revenueMinor:totals.revenue.toString(),existingTargetId:venueMappings.find(mapping=>mapping.source_value===sourceValue)?.target_id??null,suggestedTargetId:suggestion?.id??null,confidenceBasisPoints:suggestion?10000:0,reasonCode:suggestion?"exact" as const:"manual" as const};}).sort((left,right)=>BigInt(right.revenueMinor)>BigInt(left.revenueMinor)?1:-1);
-    return {id:venue.id,name:venue.name,rows,menuItems:venueItems.map(item=>({id:item.id,name:item.name}))};
+async function posMappings(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  organisationId: string,
+  venues: Venue[],
+  locale: AuthLocale,
+) {
+  if (!venues.length) return <HonestEmpty title={authMessage(locale,"nav.posMapping")} locale={locale} />;
+  const [{ data: salesData }, { data: itemData }, { data: mappingData }] =
+    await Promise.all([
+      supabase
+        .from("normalized_sales")
+        .select("venue_id,pos_product_name,pos_category,quantity,gross_minor")
+        .eq("organisation_id", organisationId),
+      supabase
+        .from("menu_items")
+        .select("id,venue_id,name")
+        .eq("organisation_id", organisationId)
+        .order("name"),
+      supabase
+        .from("source_mappings")
+        .select("venue_id,source_value,target_id,status")
+        .eq("organisation_id", organisationId)
+        .eq("connector_key", "pos_csv")
+        .eq("source_type", "product")
+        .eq("status", "confirmed"),
+    ]);
+  const sales = (salesData ?? []) as unknown as {
+    venue_id: string;
+    pos_product_name: string;
+    pos_category: string | null;
+    quantity: string;
+    gross_minor: string;
+  }[];
+  const menuItems = (itemData ?? []) as unknown as {
+    id: string;
+    venue_id: string | null;
+    name: string;
+  }[];
+  const mappings = (mappingData ?? []) as unknown as {
+    venue_id: string;
+    source_value: string;
+    target_id: string;
+  }[];
+  const normalize = (value: string) =>
+    value
+      .toLocaleLowerCase("nl-NL")
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  const workspaces = venues.map((venue) => {
+    const venueItems = menuItems.filter((item) => item.venue_id === venue.id);
+    const venueMappings = mappings.filter(
+      (mapping) => mapping.venue_id === venue.id,
+    );
+    const grouped = new Map<
+      string,
+      { category: string | null; quantity: number; revenue: bigint }
+    >();
+    sales
+      .filter((row) => row.venue_id === venue.id)
+      .forEach((row) => {
+        const current = grouped.get(row.pos_product_name) ?? {
+          category: row.pos_category,
+          quantity: 0,
+          revenue: 0n,
+        };
+        current.quantity += Number(row.quantity);
+        current.revenue += BigInt(row.gross_minor);
+        grouped.set(row.pos_product_name, current);
+      });
+    const rows = [...grouped.entries()]
+      .map(([sourceValue, totals]) => {
+        const suggestion =
+          venueItems.find(
+            (item) => normalize(item.name) === normalize(sourceValue),
+          ) ?? null;
+        return {
+          sourceValue,
+          category: totals.category,
+          quantity: String(totals.quantity),
+          revenueMinor: totals.revenue.toString(),
+          existingTargetId:
+            venueMappings.find(
+              (mapping) => mapping.source_value === sourceValue,
+            )?.target_id ?? null,
+          suggestedTargetId: suggestion?.id ?? null,
+          confidenceBasisPoints: suggestion ? 10000 : 0,
+          reasonCode: suggestion ? ("exact" as const) : ("manual" as const),
+        };
+      })
+      .sort((left, right) =>
+        BigInt(right.revenueMinor) > BigInt(left.revenueMinor) ? 1 : -1,
+      );
+    return {
+      id: venue.id,
+      name: venue.name,
+      rows,
+      menuItems: venueItems.map((item) => ({ id: item.id, name: item.name })),
+    };
   });
-  return <PosMappingWorkspace organisationId={organisationId} venues={workspaces}/>;
+  return (
+    <PosMappingWorkspace organisationId={organisationId} venues={workspaces} />
+  );
 }
 
-async function inventoryCounts(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>,organisationId:string,venues:Venue[]){
-  const [{data:locationData},{data:productData},{data:countData},{data:movementData}]=await Promise.all([
-    supabase.from("stock_locations").select("id,venue_id,name").eq("organisation_id",organisationId).eq("active",true).order("name"),
-    supabase.from("products").select("id,name,category,package_quantity").eq("organisation_id",organisationId).order("category").order("name"),
-    supabase.from("stock_counts").select("id,trading_date,count_type,status,location_id").eq("organisation_id",organisationId).order("counted_at",{ascending:false}).limit(50),
-    supabase.from("stock_movements").select("id,venue_id,location_id,product_id,trading_date,movement_type,quantity").eq("organisation_id",organisationId).order("created_at",{ascending:false}).limit(100),
+async function inventoryCounts(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  organisationId: string,
+  venues: Venue[],
+) {
+  const [
+    { data: locationData },
+    { data: productData },
+    { data: countData },
+    { data: movementData },
+  ] = await Promise.all([
+    supabase
+      .from("stock_locations")
+      .select("id,venue_id,name")
+      .eq("organisation_id", organisationId)
+      .eq("active", true)
+      .order("name"),
+    supabase
+      .from("products")
+      .select("id,name,category,package_quantity")
+      .eq("organisation_id", organisationId)
+      .order("category")
+      .order("name"),
+    supabase
+      .from("stock_counts")
+      .select("id,trading_date,count_type,status,location_id")
+      .eq("organisation_id", organisationId)
+      .order("counted_at", { ascending: false })
+      .limit(50),
+    supabase
+      .from("stock_movements")
+      .select(
+        "id,venue_id,location_id,product_id,trading_date,movement_type,quantity",
+      )
+      .eq("organisation_id", organisationId)
+      .order("created_at", { ascending: false })
+      .limit(100),
   ]);
-  return <InventoryCountWorkspace organisationId={organisationId} venues={venues} locations={(locationData??[]) as unknown as {id:string;venue_id:string;name:string}[]} products={(productData??[]) as unknown as {id:string;name:string;category:string;package_quantity:string}[]} counts={(countData??[]) as unknown as {id:string;trading_date:string;count_type:string;status:string;location_id:string}[]} movements={(movementData??[]) as unknown as {id:string;venue_id:string;location_id:string;product_id:string;trading_date:string;movement_type:string;quantity:string}[]}/>;
+  return (
+    <InventoryCountWorkspace
+      organisationId={organisationId}
+      venues={venues}
+      locations={
+        (locationData ?? []) as unknown as {
+          id: string;
+          venue_id: string;
+          name: string;
+        }[]
+      }
+      products={
+        (productData ?? []) as unknown as {
+          id: string;
+          name: string;
+          category: string;
+          package_quantity: string;
+        }[]
+      }
+      counts={
+        (countData ?? []) as unknown as {
+          id: string;
+          trading_date: string;
+          count_type: string;
+          status: string;
+          location_id: string;
+        }[]
+      }
+      movements={
+        (movementData ?? []) as unknown as {
+          id: string;
+          venue_id: string;
+          location_id: string;
+          product_id: string;
+          trading_date: string;
+          movement_type: string;
+          quantity: string;
+        }[]
+      }
+    />
+  );
 }
 
-async function reconciliationWorkspace(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>,organisationId:string,venues:Venue[]){
-  const {data:runsData}=await supabase.from("reconciliation_runs").select("id,venue_id,trading_date,version,status,input_hash,data_completeness_basis_points,created_at").eq("organisation_id",organisationId).order("created_at",{ascending:false}).limit(30);
-  const runs=(runsData??[]) as unknown as {id:string;venue_id:string;trading_date:string;version:number;status:string;input_hash:string;data_completeness_basis_points:number;created_at:string}[];
-  const ids=runs.map(run=>run.id);
-  const [{data:checksData},{data:summaryData},{data:resultData},{data:exceptionData},{data:productData},{data:locationData}]=await Promise.all([
-    ids.length?supabase.from("reconciliation_readiness_checks").select("id,reconciliation_id,classification,title_nl,title_en,why_it_matters_nl,why_it_matters_en,financial_exposure_minor,resolution_path").eq("organisation_id",organisationId).in("reconciliation_id",ids):Promise.resolve({data:[]}),
-    ids.length?supabase.from("reconciliation_summaries").select("reconciliation_id,expected_gross_revenue_minor,recorded_gross_revenue_minor,revenue_variance_minor,beverage_cost_variance_minor,margin_impact_minor,result_hash").eq("organisation_id",organisationId).in("reconciliation_id",ids):Promise.resolve({data:[]}),
-    ids.length?supabase.from("reconciliation_product_results").select("reconciliation_id,product_id,location_id,actual_consumption,theoretical_consumption,variance_quantity,cost_variance_minor,evidence_confidence").eq("organisation_id",organisationId).in("reconciliation_id",ids):Promise.resolve({data:[]}),
-    ids.length?supabase.from("reconciliation_exceptions").select("id,reconciliation_id,venue_id,exception_type,status,severity,financial_impact_minor,factual_description,suggested_actions").eq("organisation_id",organisationId).in("reconciliation_id",ids).order("financial_impact_minor",{ascending:false}):Promise.resolve({data:[]}),
-    supabase.from("products").select("id,name").eq("organisation_id",organisationId),
-    supabase.from("stock_locations").select("id,name").eq("organisation_id",organisationId),
+async function reconciliationWorkspace(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  organisationId: string,
+  venues: Venue[],
+) {
+  const { data: runsData } = await supabase
+    .from("reconciliation_runs")
+    .select(
+      "id,venue_id,trading_date,version,status,input_hash,data_completeness_basis_points,created_at",
+    )
+    .eq("organisation_id", organisationId)
+    .order("created_at", { ascending: false })
+    .limit(30);
+  const runs = (runsData ?? []) as unknown as {
+    id: string;
+    venue_id: string;
+    trading_date: string;
+    version: number;
+    status: string;
+    input_hash: string;
+    data_completeness_basis_points: number;
+    created_at: string;
+  }[];
+  const ids = runs.map((run) => run.id);
+  const [
+    { data: checksData },
+    { data: summaryData },
+    { data: resultData },
+    { data: exceptionData },
+    { data: productData },
+    { data: locationData },
+  ] = await Promise.all([
+    ids.length
+      ? supabase
+          .from("reconciliation_readiness_checks")
+          .select(
+            "id,reconciliation_id,classification,title_nl,title_en,why_it_matters_nl,why_it_matters_en,financial_exposure_minor,resolution_path",
+          )
+          .eq("organisation_id", organisationId)
+          .in("reconciliation_id", ids)
+      : Promise.resolve({ data: [] }),
+    ids.length
+      ? supabase
+          .from("reconciliation_summaries")
+          .select(
+            "reconciliation_id,expected_gross_revenue_minor,recorded_gross_revenue_minor,revenue_variance_minor,beverage_cost_variance_minor,margin_impact_minor,result_hash",
+          )
+          .eq("organisation_id", organisationId)
+          .in("reconciliation_id", ids)
+      : Promise.resolve({ data: [] }),
+    ids.length
+      ? supabase
+          .from("reconciliation_product_results")
+          .select(
+            "reconciliation_id,product_id,location_id,actual_consumption,theoretical_consumption,variance_quantity,cost_variance_minor,evidence_confidence",
+          )
+          .eq("organisation_id", organisationId)
+          .in("reconciliation_id", ids)
+      : Promise.resolve({ data: [] }),
+    ids.length
+      ? supabase
+          .from("reconciliation_exceptions")
+          .select(
+            "id,reconciliation_id,venue_id,exception_type,status,severity,financial_impact_minor,factual_description,suggested_actions",
+          )
+          .eq("organisation_id", organisationId)
+          .in("reconciliation_id", ids)
+          .order("financial_impact_minor", { ascending: false })
+      : Promise.resolve({ data: [] }),
+    supabase
+      .from("products")
+      .select("id,name")
+      .eq("organisation_id", organisationId),
+    supabase
+      .from("stock_locations")
+      .select("id,name")
+      .eq("organisation_id", organisationId),
   ]);
-  return <ReconciliationWorkspace organisationId={organisationId} venues={venues} runs={runs}
-    checks={(checksData??[]) as unknown as {id:string;reconciliation_id:string;classification:string;title_nl:string;title_en:string;why_it_matters_nl:string;why_it_matters_en:string;financial_exposure_minor:string|null;resolution_path:string}[]}
-    summaries={(summaryData??[]) as unknown as {reconciliation_id:string;expected_gross_revenue_minor:string;recorded_gross_revenue_minor:string;revenue_variance_minor:string;beverage_cost_variance_minor:string;margin_impact_minor:string;result_hash:string}[]}
-    productResults={(resultData??[]) as unknown as {reconciliation_id:string;product_id:string;location_id:string;actual_consumption:string;theoretical_consumption:string;variance_quantity:string;cost_variance_minor:string|null;evidence_confidence:string}[]}
-    exceptions={(exceptionData??[]) as unknown as {id:string;reconciliation_id:string;venue_id:string;exception_type:string;status:string;severity:string;financial_impact_minor:string|null;factual_description:string;suggested_actions:string[]}[]}
-    productNames={Object.fromEntries(((productData??[]) as unknown as {id:string;name:string}[]).map(row=>[row.id,row.name]))}
-    locationNames={Object.fromEntries(((locationData??[]) as unknown as {id:string;name:string}[]).map(row=>[row.id,row.name]))}/>;
+  return (
+    <ReconciliationWorkspace
+      organisationId={organisationId}
+      venues={venues}
+      runs={runs}
+      checks={
+        (checksData ?? []) as unknown as {
+          id: string;
+          reconciliation_id: string;
+          classification: string;
+          title_nl: string;
+          title_en: string;
+          why_it_matters_nl: string;
+          why_it_matters_en: string;
+          financial_exposure_minor: string | null;
+          resolution_path: string;
+        }[]
+      }
+      summaries={
+        (summaryData ?? []) as unknown as {
+          reconciliation_id: string;
+          expected_gross_revenue_minor: string;
+          recorded_gross_revenue_minor: string;
+          revenue_variance_minor: string;
+          beverage_cost_variance_minor: string;
+          margin_impact_minor: string;
+          result_hash: string;
+        }[]
+      }
+      productResults={
+        (resultData ?? []) as unknown as {
+          reconciliation_id: string;
+          product_id: string;
+          location_id: string;
+          actual_consumption: string;
+          theoretical_consumption: string;
+          variance_quantity: string;
+          cost_variance_minor: string | null;
+          evidence_confidence: string;
+        }[]
+      }
+      exceptions={
+        (exceptionData ?? []) as unknown as {
+          id: string;
+          reconciliation_id: string;
+          venue_id: string;
+          exception_type: string;
+          status: string;
+          severity: string;
+          financial_impact_minor: string | null;
+          factual_description: string;
+          suggested_actions: string[];
+        }[]
+      }
+      productNames={Object.fromEntries(
+        ((productData ?? []) as unknown as { id: string; name: string }[]).map(
+          (row) => [row.id, row.name],
+        ),
+      )}
+      locationNames={Object.fromEntries(
+        ((locationData ?? []) as unknown as { id: string; name: string }[]).map(
+          (row) => [row.id, row.name],
+        ),
+      )}
+    />
+  );
 }
 
-async function dashboard(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>, organisationId:string, venues:Venue[], closes:Close[]) {
-  const today=new Date().toISOString().slice(0,10);
-  const dayStart=`${today}T00:00:00.000Z`,dayEnd=`${today}T23:59:59.999Z`;
-  const [{data:deposits},{data:quotes},{data:discrepancies},{data:policies},{data:intervals},{data:shifts},{data:actions}] = await Promise.all([
-    supabase.from("booking_deposits").select("id,status,amount_minor").eq("organisation_id",organisationId).in("status",["created","pending","failed"]),
-    supabase.from("booking_quotes").select("id,expires_at,status").eq("organisation_id",organisationId).in("status",["approved","sent"]),
-    supabase.from("contract_discrepancies").select("id,status,financial_impact_minor").eq("organisation_id",organisationId).in("status",["open","reviewing","disputed"]),
-    supabase.from("compliance_policies").select("id,expires_at").eq("organisation_id",organisationId),
-    supabase.from("demand_forecast_intervals").select("id,venue_id,expected_guests,expected_revenue_minor,required_staff,starts_at,ends_at").eq("organisation_id",organisationId).gte("starts_at",dayStart).lte("starts_at",dayEnd),
-    supabase.from("shifts").select("id,venue_id,staff_id,starts_at,ends_at,break_minutes,hourly_cost_minor,status").eq("organisation_id",organisationId).gte("starts_at",dayStart).lte("starts_at",dayEnd).not("status","in","(cancelled,rejected)"),
-    supabase.from("operating_actions").select("id,title,rationale,severity,status,due_at,expected_impact_minor,venue_id").eq("organisation_id",organisationId).in("status",["open","approved","in_progress"]).order("created_at",{ascending:false}).limit(20),
+async function dashboard(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  organisationId: string,
+  venues: Venue[],
+  closes: Close[],
+  locale: AuthLocale,
+) {
+  const t=(key:AuthMessageKey)=>authMessage(locale,key);
+  const today = new Date().toISOString().slice(0, 10);
+  const dayStart = `${today}T00:00:00.000Z`,
+    dayEnd = `${today}T23:59:59.999Z`;
+  const [
+    { data: deposits },
+    { data: quotes },
+    { data: discrepancies },
+    { data: policies },
+    { data: intervals },
+    { data: shifts },
+    { data: actions },
+  ] = await Promise.all([
+    supabase
+      .from("booking_deposits")
+      .select("id,status,amount_minor")
+      .eq("organisation_id", organisationId)
+      .in("status", ["created", "pending", "failed"]),
+    supabase
+      .from("booking_quotes")
+      .select("id,expires_at,status")
+      .eq("organisation_id", organisationId)
+      .in("status", ["approved", "sent"]),
+    supabase
+      .from("contract_discrepancies")
+      .select("id,status,financial_impact_minor")
+      .eq("organisation_id", organisationId)
+      .in("status", ["open", "reviewing", "disputed"]),
+    supabase
+      .from("compliance_policies")
+      .select("id,expires_at")
+      .eq("organisation_id", organisationId),
+    supabase
+      .from("demand_forecast_intervals")
+      .select(
+        "id,venue_id,expected_guests,expected_revenue_minor,required_staff,starts_at,ends_at",
+      )
+      .eq("organisation_id", organisationId)
+      .gte("starts_at", dayStart)
+      .lte("starts_at", dayEnd),
+    supabase
+      .from("shifts")
+      .select(
+        "id,venue_id,staff_id,starts_at,ends_at,break_minutes,hourly_cost_minor,status",
+      )
+      .eq("organisation_id", organisationId)
+      .gte("starts_at", dayStart)
+      .lte("starts_at", dayEnd)
+      .not("status", "in", "(cancelled,rejected)"),
+    supabase
+      .from("operating_actions")
+      .select(
+        "id,title,rationale,severity,status,due_at,expected_impact_minor,venue_id",
+      )
+      .eq("organisation_id", organisationId)
+      .in("status", ["open", "approved", "in_progress"])
+      .order("created_at", { ascending: false })
+      .limit(20),
   ]);
-  const unexplained = closes.filter(close=>BigInt(close.difference_minor)!==0n);
-  const unapproved = closes.filter(close=>["draft","reopened","submitted"].includes(close.status));
-  const depositRows = (deposits??[]) as unknown as {id:string;status:string;amount_minor:string}[];
-  const discrepancyRows = (discrepancies??[]) as unknown as {id:string;status:string;financial_impact_minor:string}[];
-  const soon = Date.now()+14*86400000;
-  const expiringQuotes = ((quotes??[]) as unknown as {id:string;expires_at:string}[]).filter(row=>new Date(row.expires_at).getTime()<soon);
-  const expiringPolicies = ((policies??[]) as unknown as {id:string;expires_at:string|null}[]).filter(row=>row.expires_at&&new Date(row.expires_at).getTime()<soon);
-  const intervalRows=(intervals??[]) as unknown as {id:string;expected_guests:number;expected_revenue_minor:string;required_staff:number}[];
-  const shiftRows=(shifts??[]) as unknown as {id:string;staff_id:string|null;starts_at:string;ends_at:string;break_minutes:number;hourly_cost_minor:string;status:string}[];
-  const expectedGuests=intervalRows.reduce((sum,row)=>sum+row.expected_guests,0);
-  const expectedRevenue=intervalRows.reduce((sum,row)=>sum+BigInt(row.expected_revenue_minor),0n);
-  const scheduledLabor=shiftRows.reduce((sum,row)=>{
-    const minutes=Math.max(0,Math.floor((new Date(row.ends_at).getTime()-new Date(row.starts_at).getTime())/60000)-row.break_minutes);
-    return sum+(BigInt(row.hourly_cost_minor)*BigInt(minutes)+30n)/60n;
-  },0n);
-  const laborBps=expectedRevenue===0n?0n:(scheduledLabor*10000n)/expectedRevenue;
-  const actionRows=(actions??[]) as unknown as {id:string;title:string;rationale:string;severity:string;due_at:string|null;expected_impact_minor:string|null}[];
-  return <>
-    <section className="morning-brief"><div><span className="eyebrow">OCHTENDBRIEF · {today}</span><h2>{intervalRows.length?`${expectedGuests} gasten verwacht met ${euro(expectedRevenue)} omzet.`:"Nog geen intervalforecast voor vandaag."}</h2><p>{shiftRows.length?`${shiftRows.length} geplande diensten · ${euro(scheduledLabor)} loonkosten · ${Number(laborBps)/100}% van forecastomzet.`:"Plan diensten vanuit de vraag om bezettingsrisico zichtbaar te maken."}</p></div><Link className="primary" href="/app/planning">Open planning</Link></section>
-    <section className="metric-grid">
-      <Metric href="/app/planning" label="Verwachte gasten vandaag" value={String(expectedGuests)} detail={`${intervalRows.length} vraaginterval(len)`}/>
-      <Metric href="/app/planning" label="Geplande loonkosten" value={euro(scheduledLabor)} detail={`${Number(laborBps)/100}% van forecastomzet`}/>
-      <Metric href="/app/close" label="Onverklaard closeverschil" value={euro(unexplained.reduce((sum,row)=>sum+BigInt(row.difference_minor),0n))} detail={`${unexplained.length} afsluiting(en)`}/>
-      <Metric href="/app/close" label="Niet goedgekeurd" value={String(unapproved.length)} detail="Concept, heropend of ingediend"/>
-      <Metric href="/app/bookings" label="Openstaande deposito's" value={euro(depositRows.reduce((sum,row)=>sum+BigInt(row.amount_minor),0n))} detail={`${depositRows.length} actie(s)`}/>
-      <Metric href="/app/bookings" label="Offertes verlopen binnenkort" value={String(expiringQuotes.length)} detail="Binnen veertien dagen"/>
-      <Metric href="/app/suppliers" label="Open afwijkingen" value={String(discrepancyRows.length)} detail={euro(discrepancyRows.reduce((sum,row)=>sum+BigInt(row.financial_impact_minor),0n))}/>
-      <Metric href="/app/compliance" label="Beleid verloopt binnenkort" value={String(expiringPolicies.length)} detail="Controleer vervanging en toewijzing"/>
-    </section>
-    <section className="panel"><header><div><h3>Prioritaire actiewachtrij</h3><p>Iedere actie heeft een reden, status, deadline en bewijscontext.</p></div></header>
-      {!unapproved.length&&!depositRows.length&&!discrepancyRows.length&&!actionRows.length?<div className="empty-state"><h3>Geen open acties</h3><p>Voeg forecast-, boekings- of closegegevens toe om beslisregels te activeren.</p></div>:
-      <div className="record-list">
-        {actionRows.map(row=><Link key={row.id} href="/app/alerts"><b><span className={`severity ${row.severity}`}>{row.severity}</span> {row.title}</b><span>{row.rationale}</span><em>{row.expected_impact_minor?euro(row.expected_impact_minor):"Impact niet gekwantificeerd"}{row.due_at?<small>Voor {date(row.due_at)}</small>:null}</em></Link>)}
-        {unapproved.slice(0,5).map(row=><Link key={row.id} href={`/app/close/${row.id}`}><b>Close {row.trading_date}</b><span>{row.status} · {venues.find(v=>v.id===row.venue_id)?.name}</span><em>Open →</em></Link>)}
-        {depositRows.slice(0,3).map(row=><Link key={row.id} href="/app/bookings"><b>Boekingsdeposito</b><span>{row.status} · {euro(row.amount_minor)}</span><em>Open →</em></Link>)}
-      </div>}
-    </section>
-  </>;
+  const unexplained = closes.filter(
+    (close) => BigInt(close.difference_minor) !== 0n,
+  );
+  const unapproved = closes.filter((close) =>
+    ["draft", "reopened", "submitted"].includes(close.status),
+  );
+  const depositRows = (deposits ?? []) as unknown as {
+    id: string;
+    status: string;
+    amount_minor: string;
+  }[];
+  const discrepancyRows = (discrepancies ?? []) as unknown as {
+    id: string;
+    status: string;
+    financial_impact_minor: string;
+  }[];
+  const soon = Date.now() + 14 * 86400000;
+  const expiringQuotes = (
+    (quotes ?? []) as unknown as { id: string; expires_at: string }[]
+  ).filter((row) => new Date(row.expires_at).getTime() < soon);
+  const expiringPolicies = (
+    (policies ?? []) as unknown as { id: string; expires_at: string | null }[]
+  ).filter(
+    (row) => row.expires_at && new Date(row.expires_at).getTime() < soon,
+  );
+  const intervalRows = (intervals ?? []) as unknown as {
+    id: string;
+    expected_guests: number;
+    expected_revenue_minor: string;
+    required_staff: number;
+  }[];
+  const shiftRows = (shifts ?? []) as unknown as {
+    id: string;
+    staff_id: string | null;
+    starts_at: string;
+    ends_at: string;
+    break_minutes: number;
+    hourly_cost_minor: string;
+    status: string;
+  }[];
+  const expectedGuests = intervalRows.reduce(
+    (sum, row) => sum + row.expected_guests,
+    0,
+  );
+  const expectedRevenue = intervalRows.reduce(
+    (sum, row) => sum + BigInt(row.expected_revenue_minor),
+    0n,
+  );
+  const scheduledLabor = shiftRows.reduce((sum, row) => {
+    const minutes = Math.max(
+      0,
+      Math.floor(
+        (new Date(row.ends_at).getTime() - new Date(row.starts_at).getTime()) /
+          60000,
+      ) - row.break_minutes,
+    );
+    return sum + (BigInt(row.hourly_cost_minor) * BigInt(minutes) + 30n) / 60n;
+  }, 0n);
+  const laborBps =
+    expectedRevenue === 0n ? 0n : (scheduledLabor * 10000n) / expectedRevenue;
+  const actionRows = (actions ?? []) as unknown as {
+    id: string;
+    title: string;
+    rationale: string;
+    severity: string;
+    due_at: string | null;
+    expected_impact_minor: string | null;
+  }[];
+  return (
+    <>
+      <section className="morning-brief">
+        <div>
+          <span className="eyebrow">{t("dashboard.brief")} · {today}</span>
+          <h2>
+            {intervalRows.length
+              ? `${expectedGuests} ${t("dashboard.expectedGuests")} ${euro(expectedRevenue,locale)} ${t("dashboard.revenue")}.`
+              : t("dashboard.noForecast")}
+          </h2>
+          <p>
+            {shiftRows.length
+              ? `${shiftRows.length} ${t("dashboard.scheduledShifts")} · ${euro(scheduledLabor,locale)} ${t("dashboard.laborCosts")} · ${Number(laborBps) / 100}% ${t("dashboard.forecastShare")}.`
+              : t("dashboard.planFromDemand")}
+          </p>
+        </div>
+        <Link className="primary" href="/app/planning">
+          {t("dashboard.openPlanning")}
+        </Link>
+      </section>
+      <section className="metric-grid">
+        <Metric
+          href="/app/planning"
+          label={t("dashboard.guestsToday")}
+          value={String(expectedGuests)}
+          detail={`${intervalRows.length} ${t("dashboard.demandIntervals")}`}
+        />
+        <Metric
+          href="/app/planning"
+          label={t("dashboard.scheduledLabor")}
+          value={euro(scheduledLabor,locale)}
+          detail={`${Number(laborBps) / 100}% ${t("dashboard.forecastShare")}`}
+        />
+        <Metric
+          href="/app/close"
+          label={t("dashboard.unexplainedClose")}
+          value={euro(
+            unexplained.reduce(
+              (sum, row) => sum + BigInt(row.difference_minor),
+              0n,
+            ),locale
+          )}
+          detail={`${unexplained.length} ${t("dashboard.closes")}`}
+        />
+        <Metric
+          href="/app/close"
+          label={t("dashboard.notApproved")}
+          value={String(unapproved.length)}
+          detail={t("dashboard.notApprovedHelp")}
+        />
+        <Metric
+          href="/app/bookings"
+          label={t("dashboard.openDeposits")}
+          value={euro(
+            depositRows.reduce(
+              (sum, row) => sum + BigInt(row.amount_minor),
+              0n,
+            ),locale
+          )}
+          detail={`${depositRows.length} ${t("dashboard.actions")}`}
+        />
+        <Metric
+          href="/app/bookings"
+          label={t("dashboard.expiringQuotes")}
+          value={String(expiringQuotes.length)}
+          detail={t("dashboard.withinTwoWeeks")}
+        />
+        <Metric
+          href="/app/suppliers"
+          label={t("dashboard.openDiscrepancies")}
+          value={String(discrepancyRows.length)}
+          detail={euro(
+            discrepancyRows.reduce(
+              (sum, row) => sum + BigInt(row.financial_impact_minor),
+              0n,
+            ),locale
+          )}
+        />
+        <Metric
+          href="/app/compliance"
+          label={t("dashboard.expiringPolicies")}
+          value={String(expiringPolicies.length)}
+          detail={t("dashboard.reviewPolicy")}
+        />
+      </section>
+      <section className="panel">
+        <header>
+          <div>
+            <h3>{t("dashboard.queue")}</h3>
+            <p>{t("dashboard.queueHelp")}</p>
+          </div>
+        </header>
+        {!unapproved.length &&
+        !depositRows.length &&
+        !discrepancyRows.length &&
+        !actionRows.length ? (
+          <div className="empty-state">
+            <h3>{t("dashboard.noActions")}</h3>
+            <p>{t("dashboard.noActionsHelp")}</p>
+          </div>
+        ) : (
+          <div className="record-list">
+            {actionRows.map((row) => (
+              <Link key={row.id} href="/app/alerts">
+                <b>
+                  <span className={`severity ${row.severity}`}>
+                    {authEnumLabel(locale,row.severity)}
+                  </span>{" "}
+                  {row.title}
+                </b>
+                <span>{row.rationale}</span>
+                <em>
+                  {row.expected_impact_minor
+                    ? euro(row.expected_impact_minor,locale)
+                    : t("common.impactUnknown")}
+                  {row.due_at ? <small>{t("common.before")} {date(row.due_at,locale)}</small> : null}
+                </em>
+              </Link>
+            ))}
+            {unapproved.slice(0, 5).map((row) => (
+              <Link key={row.id} href={`/app/close/${row.id}`}>
+                <b>Close {row.trading_date}</b>
+                <span>
+                  {authEnumLabel(locale,row.status)} ·{" "}
+                  {venues.find((v) => v.id === row.venue_id)?.name}
+                </span>
+                <em>{t("common.open")} →</em>
+              </Link>
+            ))}
+            {depositRows.slice(0, 3).map((row) => (
+              <Link key={row.id} href="/app/bookings">
+                <b>{t("dashboard.bookingDeposit")}</b>
+                <span>
+                  {authEnumLabel(locale,row.status)} · {euro(row.amount_minor,locale)}
+                </span>
+                <em>{t("common.open")} →</em>
+              </Link>
+            ))}
+          </div>
+        )}
+      </section>
+    </>
+  );
 }
 
-async function planning(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>, organisationId:string, venues:Venue[]) {
-  const [{data:departmentData},{data:roleData},{data:staffData},{data:intervalData},{data:shiftData},{data:proposalData},{data:requestData},{data:recipientData}]=await Promise.all([
-    supabase.from("departments").select("id,venue_id,name").eq("organisation_id",organisationId).order("name"),
-    supabase.from("operational_roles").select("id,department_id,name,hourly_cost_minor,minimum_staff,guests_per_staff").eq("organisation_id",organisationId).order("name"),
-    supabase.from("staff_profiles").select("id,full_name,role_name").eq("organisation_id",organisationId).order("full_name"),
-    supabase.from("demand_forecast_intervals").select("id,venue_id,starts_at,ends_at,expected_guests,expected_revenue_minor,required_staff").eq("organisation_id",organisationId).order("starts_at",{ascending:false}).limit(30),
-    supabase.from("shifts").select("id,venue_id,department_id,role_id,staff_id,starts_at,ends_at,break_minutes,hourly_cost_minor,status").eq("organisation_id",organisationId).order("starts_at",{ascending:false}).limit(50),
-    supabase.from("ai_proposals").select("id,action_type,rationale,proposed_change,missing_data,confidence_basis,approval_status,execution_status,created_at").eq("organisation_id",organisationId).eq("action_type","schedule_proposal").order("created_at",{ascending:false}).limit(10),
-    supabase.from("availability_request_periods").select("id,venue_id,starts_at,ends_at,deadline_at,status,created_at").eq("organisation_id",organisationId).order("created_at",{ascending:false}).limit(20),
-    supabase.from("availability_request_recipients").select("id,request_id,staff_id,status,opened_at,submitted_at").eq("organisation_id",organisationId).order("created_at",{ascending:false}).limit(200),
+async function planning(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  organisationId: string,
+  venues: Venue[],
+  locale: AuthLocale,
+) {
+  const t=(key:AuthMessageKey)=>authMessage(locale,key);
+  const [
+    { data: departmentData },
+    { data: roleData },
+    { data: staffData },
+    { data: intervalData },
+    { data: shiftData },
+    { data: proposalData },
+    { data: requestData },
+    { data: recipientData },
+  ] = await Promise.all([
+    supabase
+      .from("departments")
+      .select("id,venue_id,name")
+      .eq("organisation_id", organisationId)
+      .order("name"),
+    supabase
+      .from("operational_roles")
+      .select(
+        "id,department_id,name,hourly_cost_minor,minimum_staff,guests_per_staff",
+      )
+      .eq("organisation_id", organisationId)
+      .order("name"),
+    supabase
+      .from("staff_profiles")
+      .select("id,full_name,role_name")
+      .eq("organisation_id", organisationId)
+      .order("full_name"),
+    supabase
+      .from("demand_forecast_intervals")
+      .select(
+        "id,venue_id,starts_at,ends_at,expected_guests,expected_revenue_minor,required_staff",
+      )
+      .eq("organisation_id", organisationId)
+      .order("starts_at", { ascending: false })
+      .limit(30),
+    supabase
+      .from("shifts")
+      .select(
+        "id,venue_id,department_id,role_id,staff_id,starts_at,ends_at,break_minutes,hourly_cost_minor,status",
+      )
+      .eq("organisation_id", organisationId)
+      .order("starts_at", { ascending: false })
+      .limit(50),
+    supabase
+      .from("ai_proposals")
+      .select(
+        "id,action_type,rationale,proposed_change,missing_data,confidence_basis,approval_status,execution_status,created_at",
+      )
+      .eq("organisation_id", organisationId)
+      .eq("action_type", "schedule_proposal")
+      .order("created_at", { ascending: false })
+      .limit(10),
+    supabase
+      .from("availability_request_periods")
+      .select("id,venue_id,starts_at,ends_at,deadline_at,status,created_at")
+      .eq("organisation_id", organisationId)
+      .order("created_at", { ascending: false })
+      .limit(20),
+    supabase
+      .from("availability_request_recipients")
+      .select("id,request_id,staff_id,status,opened_at,submitted_at")
+      .eq("organisation_id", organisationId)
+      .order("created_at", { ascending: false })
+      .limit(200),
   ]);
-  const departments=(departmentData??[]) as unknown as {id:string;venue_id:string;name:string}[];
-  const roles=(roleData??[]) as unknown as {id:string;department_id:string;name:string;hourly_cost_minor:string;minimum_staff:number;guests_per_staff:number}[];
-  const staff=(staffData??[]) as unknown as {id:string;full_name:string;role_name:string}[];
-  const intervals=(intervalData??[]) as unknown as {id:string;venue_id:string;starts_at:string;ends_at:string;expected_guests:number;expected_revenue_minor:string;required_staff:number}[];
-  const shifts=(shiftData??[]) as unknown as {id:string;venue_id:string;department_id:string;role_id:string;staff_id:string|null;starts_at:string;ends_at:string;break_minutes:number;hourly_cost_minor:string;status:string}[];
-  const proposals=(proposalData??[]) as unknown as {id:string;rationale:string;missing_data:string[];confidence_basis:string;approval_status:string;execution_status:string;created_at:string}[];
-  const requests=(requestData??[]) as unknown as {id:string;venue_id:string;starts_at:string;ends_at:string;deadline_at:string;status:string;created_at:string}[];
-  const recipients=(recipientData??[]) as unknown as {id:string;request_id:string;staff_id:string;status:string;opened_at:string|null;submitted_at:string|null}[];
-  const departmentOptions=departments.map(row=>({label:row.name,value:row.id}));
-  const roleOptions=roles.map(row=>({label:row.name,value:row.id}));
-  const staffOptions=[{label:"Open dienst",value:"open"},...staff.map(row=>({label:`${row.full_name} · ${row.role_name}`,value:row.id}))];
-  return <div className="workflow-stack">
-    <section className="connected-flow"><span>Vraag</span><b>→</b><span>Forecast</span><b>→</b><span>Rooster</span><b>→</b><span>Publicatie</span><b>→</b><span>Uren</span><b>→</b><span>Close & Learn</span></section>
-    <div className="split-workspace"><AvailabilityManager organisationId={organisationId} venues={venues.map(v=>({id:v.id,label:v.name}))} staff={staff.map(person=>({id:person.id,label:`${person.full_name} · ${person.role_name}`}))}/><RecordPanel title="Beschikbaarheidsaanvragen" empty="Nog geen aanvragen verstuurd.">{requests.map(request=>{const rows=recipients.filter(row=>row.request_id===request.id);return <div className="record-row" key={request.id}><b>{venues.find(v=>v.id===request.venue_id)?.name||"Vestiging"} · {request.status}</b><span>{date(request.starts_at)}–{date(request.ends_at)}<small>{rows.map(row=>`${staff.find(s=>s.id===row.staff_id)?.full_name||"Medewerker"}: ${row.status}`).join(" · ")}</small></span><em>{rows.filter(row=>row.status==="submitted").length}/{rows.length} ingediend<small>Deadline {date(request.deadline_at)}</small></em></div>})}</RecordPanel></div>
-    <div className="split-workspace">
-      <WorkflowForm endpoint="/api/planning" organisationId={organisationId} workflow="forecast" title="Vraaginterval plannen" submitLabel="Forecast opslaan" fields={[
-        {name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues)},{name:"tradingDate",label:"Handelsdatum",type:"date",required:true},
-        {name:"startsAt",label:"Interval start",type:"datetime-local",required:true},{name:"endsAt",label:"Interval einde",type:"datetime-local",required:true},
-        {name:"expectedGuests",label:"Verwachte gasten",type:"number",required:true},{name:"expectedRevenue",label:"Verwachte omzet (€)",required:true},
-        {name:"minimumStaff",label:"Minimale bezetting",type:"number",required:true},{name:"guestsPerStaff",label:"Gasten per medewerker",type:"number",required:true},
-        {name:"managerNote",label:"Aannames en context",type:"textarea"},
-      ]}/>
-      <RecordPanel title="Vraag per tijdsblok" empty="Nog geen intervalforecast.">{intervals.map(row=><div className="record-row" key={row.id}><b>{new Date(row.starts_at).toLocaleString("nl-NL",{dateStyle:"short",timeStyle:"short"})}</b><span>{row.expected_guests} gasten · {row.required_staff} medewerkers vereist</span><em>{euro(row.expected_revenue_minor)}</em></div>)}</RecordPanel>
-    </div>
-    {!departments.length?<div className="split-workspace">
-      <WorkflowForm endpoint="/api/planning" organisationId={organisationId} workflow="department" title="Eerste afdeling" submitLabel="Afdeling toevoegen" fields={[{name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues)},{name:"name",label:"Afdelingsnaam",required:true,placeholder:"Bar, keuken, bediening…"}]}/>
-      <div className="legal-note">Maak eerst een afdeling aan. Daarna kun je operationele rollen en diensten plannen.</div>
-    </div>:!roles.length?<WorkflowForm endpoint="/api/planning" organisationId={organisationId} workflow="role" title="Eerste operationele rol" submitLabel="Rol toevoegen" fields={[
-      {name:"departmentId",label:"Afdeling",type:"select",required:true,options:departmentOptions},{name:"name",label:"Rolnaam",required:true},{name:"hourlyCost",label:"All-in uurkosten (€)",required:true},
-      {name:"minimumStaff",label:"Minimale bezetting",type:"number",required:true},{name:"guestsPerStaff",label:"Gasten per medewerker",type:"number",required:true},
-    ]}/>:<div className="split-workspace">
-      <WorkflowForm endpoint="/api/planning" organisationId={organisationId} workflow="shift" title="Conceptdienst" submitLabel="Dienst toevoegen" fields={[
-        {name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues)},{name:"departmentId",label:"Afdeling",type:"select",required:true,options:departmentOptions},
-        {name:"roleId",label:"Rol",type:"select",required:true,options:roleOptions},{name:"staffId",label:"Medewerker",type:"select",required:true,options:staffOptions},
-        {name:"startsAt",label:"Start",type:"datetime-local",required:true},{name:"endsAt",label:"Einde",type:"datetime-local",required:true},{name:"breakMinutes",label:"Pauze (min)",type:"number",required:true},{name:"hourlyCost",label:"Uurkosten (€)",required:true},
-      ]}/>
-      <RecordPanel title="Rooster · concept en gepubliceerd" empty="Nog geen diensten.">{shifts.map(row=><div className="record-row" key={row.id}><b>{staff.find(person=>person.id===row.staff_id)?.full_name||"Open dienst"} · {roles.find(role=>role.id===row.role_id)?.name||"Rol"}</b><span>{new Date(row.starts_at).toLocaleString("nl-NL",{dateStyle:"short",timeStyle:"short"})}–{new Date(row.ends_at).toLocaleTimeString("nl-NL",{hour:"2-digit",minute:"2-digit"})}</span><em>{row.status}</em></div>)}</RecordPanel>
-    </div>}
-    <div className="split-workspace">
-      <WorkflowForm endpoint="/api/planning" organisationId={organisationId} workflow="publish" title="Rooster publiceren" submitLabel="Gecontroleerd publiceren" fields={[{name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues)},{name:"startsAt",label:"Periode start",type:"datetime-local",required:true},{name:"endsAt",label:"Periode einde",type:"datetime-local",required:true}]}/>
-      <WorkflowForm endpoint="/api/planning" organisationId={organisationId} workflow="proposal" title="Uitlegbare roostercontrole" submitLabel="Voorstel genereren" fields={[{name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues)},{name:"tradingDate",label:"Handelsdatum",type:"date",required:true}]}/>
-    </div>
-    <RecordPanel title="Governed voorstellen" empty="Nog geen planningvoorstellen.">{proposals.map(row=><div className="record-row" key={row.id}><b>{row.approval_status} · {date(row.created_at)}</b><span>{row.rationale}<small>{row.confidence_basis}</small></span><em>{row.execution_status}{row.missing_data.length?<small>{row.missing_data.join(" ")}</small>:null}</em></div>)}</RecordPanel>
-  </div>;
-}
-
-async function myWork(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>, organisationId:string, venues:Venue[], userId:string){
-  const {data:profile}=await supabase.from("staff_profiles").select("id,full_name").eq("organisation_id",organisationId).eq("auth_user_id",userId).maybeSingle();
-  if(!profile)return <section className="panel"><div className="empty-state"><h2>Medewerkersprofiel vereist</h2><p>Vraag je manager om je account aan een medewerkersprofiel te koppelen.</p></div></section>;
-  const staff=profile as unknown as {id:string;full_name:string};
-  const [{data:shiftData},{data:responseData},{data:timeData},{data:availabilityData}]=await Promise.all([
-    supabase.from("shifts").select("id,venue_id,starts_at,ends_at,break_minutes,status").eq("organisation_id",organisationId).eq("staff_id",staff.id).gte("ends_at",new Date().toISOString()).order("starts_at").limit(14),
-    supabase.from("shift_responses").select("shift_id,response").eq("organisation_id",organisationId).eq("staff_id",staff.id),
-    supabase.from("time_records").select("id,venue_id,clocked_in_at,clocked_out_at,break_minutes,status,approved_at").eq("organisation_id",organisationId).eq("staff_id",staff.id).order("clocked_in_at",{ascending:false}).limit(14),
-    supabase.from("staff_availability").select("id,starts_at,ends_at,availability").eq("organisation_id",organisationId).eq("staff_id",staff.id).gte("ends_at",new Date().toISOString()).order("starts_at").limit(14),
-  ]);
-  const shifts=(shiftData??[]) as unknown as {id:string;venue_id:string;starts_at:string;ends_at:string;break_minutes:number;status:string}[];
-  const responses=(responseData??[]) as unknown as {shift_id:string;response:string}[];
-  const records=(timeData??[]) as unknown as {id:string;venue_id:string;clocked_in_at:string;clocked_out_at:string|null;break_minutes:number;status:string;approved_at:string|null}[];
-  const availability=(availabilityData??[]) as unknown as {id:string;starts_at:string;ends_at:string;availability:string}[];
-  const openRecord=records.find(record=>!record.clocked_out_at);
-  const next=shifts[0];
-  return <div className="workflow-stack employee-work">
-    <section className="morning-brief"><div><div className="eyebrow">MIJN WERK · {staff.full_name}</div><h2>{next?`Volgende dienst ${new Date(next.starts_at).toLocaleString("nl-NL",{weekday:"long",hour:"2-digit",minute:"2-digit"})}`:"Geen komende dienst"}</h2><p>Alleen jouw rooster, beschikbaarheid en uren zijn hier zichtbaar.</p></div><span className="status">{openRecord?"ingeklokt":"niet ingeklokt"}</span></section>
-    {openRecord?<WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="clock_out" title="Lopende dienst" submitLabel="Uitklokken en indienen" fields={[{name:"timeRecordId",label:"Urenrecord",type:"select",required:true,options:[{label:`Gestart ${new Date(openRecord.clocked_in_at).toLocaleTimeString("nl-NL",{hour:"2-digit",minute:"2-digit"})}`,value:openRecord.id}]}]}/>:next?<WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="clock_in" title="Aanwezigheid" submitLabel="Inklokken" fields={[{name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues.filter(v=>v.id===next.venue_id))},{name:"shiftId",label:"Dienst",type:"select",required:true,options:[{label:new Date(next.starts_at).toLocaleString("nl-NL"),value:next.id}]}]}/>:null}
-    <section className="mobile-roster" aria-label="Mijn komende rooster">{shifts.length?shifts.map(shift=><article key={shift.id}><div><b>{new Date(shift.starts_at).toLocaleDateString("nl-NL",{weekday:"long",day:"numeric",month:"short"})}</b><span>{new Date(shift.starts_at).toLocaleTimeString("nl-NL",{hour:"2-digit",minute:"2-digit"})}–{new Date(shift.ends_at).toLocaleTimeString("nl-NL",{hour:"2-digit",minute:"2-digit"})} · pauze {shift.break_minutes} min</span></div><em>{responses.find(r=>r.shift_id===shift.id)?.response||shift.status}</em>{!responses.some(r=>r.shift_id===shift.id)&&shift.status==="published"?<WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="respond" title="Bevestig deze dienst" submitLabel="Antwoord opslaan" fields={[{name:"venueId",label:"Vestiging",type:"select",required:true,options:[{label:venues.find(v=>v.id===shift.venue_id)?.name||"Vestiging",value:shift.venue_id}]},{name:"shiftId",label:"Dienst",type:"select",required:true,options:[{label:new Date(shift.starts_at).toLocaleString("nl-NL"),value:shift.id}]},{name:"staffId",label:"Medewerker",type:"select",required:true,options:[{label:staff.full_name,value:staff.id}]},{name:"response",label:"Antwoord",type:"select",required:true,options:[{label:"Accepteren",value:"accepted"},{label:"Afwijzen",value:"rejected"}]},{name:"reason",label:"Reden bij afwijzing"}]}/>:null}</article>):<div className="empty-state"><p>Je hebt nog geen komende diensten.</p></div>}</section>
-    <div className="split-workspace"><RecordPanel title="Beschikbaarheid" empty="Geen komende beschikbaarheid vastgelegd.">{availability.map(row=><div className="record-row" key={row.id}><b>{row.availability}</b><span>{new Date(row.starts_at).toLocaleString("nl-NL")}</span><em>tot {new Date(row.ends_at).toLocaleTimeString("nl-NL",{hour:"2-digit",minute:"2-digit"})}</em></div>)}</RecordPanel><RecordPanel title="Ingediende uren" empty="Nog geen uren ingediend.">{records.map(row=><div className="record-row" key={row.id}><b>{date(row.clocked_in_at)}</b><span>{row.status} · pauze {row.break_minutes} min</span><em>{row.approved_at?"goedgekeurd":"in behandeling"}</em></div>)}</RecordPanel></div>
-  </div>;
-}
-
-function Metric({href,label,value,detail}:{href:string;label:string;value:string;detail:string}) { return <Link href={href} className="metric"><span>{label}</span><strong>{value}</strong><small>{detail} →</small></Link>; }
-
-function closeList(venues:Venue[], closes:Close[]) { return <section className="panel"><header><div><h3>Afsluitingen</h3><p>Nieuwste handelsdatum eerst. Open een record voor bedragen, bewijs en status.</p></div></header>{!closes.length?<div className="empty-state"><h3>Nog geen afsluitingen</h3><p>Start met de eerste handelsdatum; bedragen worden server-side als gehele centen verwerkt.</p><Link className="primary" href="/app/close/new">Eerste afsluiting</Link></div>:<div className="record-list">{closes.map(close=><Link key={close.id} href={`/app/close/${close.id}`}><b>{close.trading_date} · v{close.version}</b><span>{venues.find(v=>v.id===close.venue_id)?.name} · {close.status}</span><em>{euro(close.difference_minor)} →</em></Link>)}</div>}</section>; }
-
-async function closeDetail(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>, organisationId:string, closeId:string, venues:Venue[]) {
-  const [{data:close},{data:lines},{data:audit},{data:canApprove},{data:canReopen}] = await Promise.all([
-    supabase.from("closing_sessions").select("id,venue_id,trading_date,status,version,expected_total_minor,accounted_total_minor,difference_minor,reopened_reason").eq("organisation_id",organisationId).eq("id",closeId).single(),
-    supabase.from("closing_lines").select("id,line_type,expected_minor,actual_minor,metadata,created_at").eq("organisation_id",organisationId).eq("closing_session_id",closeId).order("created_at"),
-    supabase.from("audit_logs").select("id,action,actor_id,created_at,after_summary").eq("organisation_id",organisationId).eq("entity_id",closeId).order("created_at",{ascending:false}).limit(30),
-    supabase.rpc("has_capability",{target_organisation_id:organisationId,target_venue_id:null,required_capability:"close.approve"}),
-    supabase.rpc("has_capability",{target_organisation_id:organisationId,target_venue_id:null,required_capability:"close.reopen"}),
-  ]);
-  if (!close) return <HonestEmpty title="Afsluiting niet gevonden"/>;
-  const row=close as unknown as Close&{reopened_reason:string|null};
-  const lineRows=(lines??[]) as unknown as {id:string;line_type:string;expected_minor:string;actual_minor:string;metadata:{note?:string}}[];
-  const expected=lineRows.reduce((sum,line)=>sum+BigInt(line.expected_minor),0n);
-  const actual=lineRows.reduce((sum,line)=>sum+BigInt(line.actual_minor),0n);
-  return <div className="workflow-stack">
-    <section className="detail-head"><div><span className={`status ${row.status}`}>{row.status}</span><h2>{row.trading_date} · versie {row.version}</h2><p>{venues.find(v=>v.id===row.venue_id)?.name}{row.reopened_reason?` · Heropend: ${row.reopened_reason}`:""}</p></div><div className="money-summary"><span>Verwacht <b>{euro(expected)}</b></span><span>Werkelijk <b>{euro(actual)}</b></span><span>Verschil <b>{euro(actual-expected)}</b></span></div></section>
-    <CloseWorkspace organisationId={organisationId} closeId={closeId} status={row.status} canApprove={Boolean(canApprove)} canReopen={Boolean(canReopen)}/>
-    <section className="panel"><header><div><h3>Bedragregels</h3><p>De totalen worden bij iedere statusovergang opnieuw in PostgreSQL berekend.</p></div></header>{!lineRows.length?<div className="empty-state"><p>Voeg de eerste verwachte en werkelijke bron toe.</p></div>:<div className="record-list">{lineRows.map(line=><div className="record-row" key={line.id}><b>{line.line_type.replaceAll("_"," ")}</b><span>{line.metadata.note||"Geen toelichting"}</span><em>{euro(line.expected_minor)} → {euro(line.actual_minor)}</em></div>)}</div>}</section>
-    <section className="panel"><header><div><h3>Auditlijn</h3><p>Actor-ID en tijdstip voor iedere materiële bewerking.</p></div></header><div className="record-list">{((audit??[]) as unknown as {id:string;action:string;actor_id:string;created_at:string}[]).map(item=><div className="record-row" key={item.id}><b>{item.action}</b><span>{item.actor_id}</span><em>{date(item.created_at)}</em></div>)}</div></section>
-  </div>;
-}
-
-async function bookings(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>, organisationId:string, venues:Venue[]) {
-  const {data}=await supabase.from("booking_inquiries").select("id,venue_id,status,preferred_start,group_size,contact_name,occasion,budget_minor").eq("organisation_id",organisationId).order("preferred_start");
-  const rows=(data??[]) as Inquiry[];
-  return <div className="split-workspace"><WorkflowForm organisationId={organisationId} workflow="booking_inquiry" title="Nieuwe groepsaanvraag" submitLabel="Aanvraag vastleggen" fields={[
-    {name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues)},{name:"contactName",label:"Contactnaam",required:true},{name:"contactEmail",label:"E-mail",type:"email",required:true},
-    {name:"preferredStart",label:"Gewenste datum en tijd",type:"datetime-local",required:true},{name:"groupSize",label:"Aantal gasten",type:"number",required:true},
-    {name:"budget",label:"Budget (€)",placeholder:"1500,00"},{name:"occasion",label:"Gelegenheid"},{name:"source",label:"Bron",required:true,placeholder:"Website, telefoon, partner…"},
-    {name:"preferences",label:"Voorkeuren en toegankelijkheid",type:"textarea"},
-  ]}/><RecordPanel title="Aanvraagpipeline" empty="Nog geen groepsaanvragen.">{rows.map(row=><div className="record-row" key={row.id}><b>{row.contact_name} · {row.group_size} gasten</b><span>{date(row.preferred_start)} · {row.occasion||"Geen gelegenheid"} · {row.status}</span><em>{row.budget_minor?euro(row.budget_minor):"Budget onbekend"}</em></div>)}</RecordPanel></div>;
-}
-
-async function productsAndRecipes(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>, organisationId:string, venues:Venue[]) {
-  const [{data:supplierData},{data:productData},{data:costData},{data:itemData},{data:priceData}]=await Promise.all([
-    supabase.from("suppliers").select("id,name").eq("organisation_id",organisationId).order("name"),
-    supabase.from("products").select("id,name,brand,category,sku,package_quantity,purchase_unit,serving_unit,supplier_id").eq("organisation_id",organisationId).order("name"),
-    supabase.from("product_cost_history").select("product_id,net_cost_minor,vat_basis_points,effective_at").eq("organisation_id",organisationId).order("effective_at",{ascending:false}),
-    supabase.from("menu_items").select("id,venue_id,name,category,target_margin_basis_points").eq("organisation_id",organisationId).order("name"),
-    supabase.from("menu_price_history").select("menu_item_id,gross_price_minor,direct_cost_snapshot_minor,margin_snapshot_basis_points,effective_at").eq("organisation_id",organisationId).order("effective_at",{ascending:false}),
-  ]);
-  const suppliers=(supplierData??[]) as unknown as {id:string;name:string}[];
-  const products=(productData??[]) as unknown as {id:string;name:string;brand:string|null;category:string;sku:string|null;package_quantity:string;purchase_unit:string;serving_unit:string;supplier_id:string|null}[];
-  const costs=(costData??[]) as unknown as {product_id:string;net_cost_minor:string;vat_basis_points:number;effective_at:string}[];
-  const items=(itemData??[]) as unknown as {id:string;venue_id:string|null;name:string;category:string;target_margin_basis_points:number}[];
-  const prices=(priceData??[]) as unknown as {menu_item_id:string;gross_price_minor:string;direct_cost_snapshot_minor:string;margin_snapshot_basis_points:number;effective_at:string}[];
-  const supplierOptions=[{label:"Geen voorkeursleverancier",value:""},...suppliers.map(row=>({label:row.name,value:row.id}))];
-  const productOptions=products.map(row=>({label:`${row.name} · ${row.serving_unit}`,value:row.id}));
-  return <div className="workflow-stack">
-    <section className="connected-flow"><span>Leverancier</span><b>→</b><span>Product + prijs</span><b>→</b><span>Receptkost</span><b>→</b><span>Menuprijs</span><b>→</b><span>Marge-snapshot</span></section>
-    <div className="split-workspace">
-      <WorkflowForm organisationId={organisationId} workflow="product" title="Product met actuele inkoopprijs" submitLabel="Product opslaan" fields={[
-        {name:"supplierId",label:"Voorkeursleverancier",type:"select",options:supplierOptions},{name:"name",label:"Productnaam",required:true},
-        {name:"brand",label:"Merk"},{name:"category",label:"Categorie",required:true},{name:"sku",label:"Interne SKU"},{name:"barcode",label:"Barcode"},
-        {name:"packageQuantity",label:"Aantal basiseenheden per inkoopverpakking",type:"number",required:true},
-        {name:"unitVolumeMl",label:"Inhoud ml (optioneel)",type:"number"},{name:"purchaseUnit",label:"Inkoopeenheid",required:true,placeholder:"fles, krat, doos"},
-        {name:"servingUnit",label:"Recept-/basiseenheid",required:true,placeholder:"ml, gram, stuk"},
-        {name:"netCost",label:"Netto inkoopprijs (€)",required:true},{name:"vatBasisPoints",label:"Btw",type:"select",required:true,options:[{label:"9%",value:"900"},{label:"21%",value:"2100"},{label:"0%",value:"0"}]},
-        {name:"deposit",label:"Statiegeld (€)",placeholder:"0,00"},
-      ]}/>
-      <RecordPanel title="Productmaster" empty="Voeg eerst een product en de geldende inkoopprijs toe.">{products.map(row=>{const cost=costs.find(c=>c.product_id===row.id);return <div className="record-row" key={row.id}><b>{row.name}{row.brand?` · ${row.brand}`:""}</b><span>{row.category} · {row.package_quantity} {row.serving_unit} per {row.purchase_unit}<small>{row.sku||"Geen SKU"} · {suppliers.find(s=>s.id===row.supplier_id)?.name||"Geen voorkeursleverancier"}</small></span><em>{cost?euro(cost.net_cost_minor):"Prijs ontbreekt"}<small>{cost?`${cost.vat_basis_points/100}% btw · ${date(cost.effective_at)}`:""}</small></em></div>})}</RecordPanel>
-    </div>
-    {products.length?<div className="split-workspace">
-      <WorkflowForm organisationId={organisationId} workflow="menu_item" title="Menu-item met eerste receptcomponent" submitLabel="Recept en marge opslaan" fields={[
-        {name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues)},{name:"name",label:"Menu-item",required:true},
-        {name:"category",label:"Categorie",required:true},{name:"productId",label:"Productcomponent",type:"select",required:true,options:productOptions},
-        {name:"quantity",label:"Hoeveelheid in recept-/basiseenheid",type:"number",required:true},{name:"unit",label:"Eenheid (exact gelijk aan product)",required:true},
-        {name:"wasteBasisPoints",label:"Verspilling (basispunten; 250 = 2,5%)",type:"number",required:true},
-        {name:"grossPrice",label:"Verkoopprijs incl. btw (€)",required:true},{name:"vatBasisPoints",label:"Btw",type:"select",required:true,options:[{label:"9%",value:"900"},{label:"21%",value:"2100"}]},
-        {name:"targetMarginBasisPoints",label:"Doelmarge (basispunten)",type:"number",required:true},
-      ]}/>
-      <RecordPanel title="Menuprijzen en marge-snapshots" empty="Nog geen menu-item berekend.">{items.map(row=>{const price=prices.find(p=>p.menu_item_id===row.id);return <div className="record-row" key={row.id}><b>{row.name} · {row.category}</b><span>{venues.find(v=>v.id===row.venue_id)?.name||"Alle vestigingen"}<small>Doelmarge {row.target_margin_basis_points/100}%</small></span><em>{price?euro(price.gross_price_minor):"Prijs ontbreekt"}<small>{price?`kost ${euro(price.direct_cost_snapshot_minor)} · marge ${price.margin_snapshot_basis_points/100}%`:""}</small></em></div>})}</RecordPanel>
-    </div>:<div className="legal-note">Maak eerst een product met actuele inkoopprijs aan; daarna wordt het receptformulier beschikbaar.</div>}
-  </div>;
-}
-
-async function suppliers(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>, organisationId:string) {
-  const [{data:supplierData},{data:contracts},{data:discrepancies}]=await Promise.all([
-    supabase.from("suppliers").select("id,name,email").eq("organisation_id",organisationId).order("name"),
-    supabase.from("supplier_contracts").select("id,name,status,start_date,end_date,notice_deadline").eq("organisation_id",organisationId).order("notice_deadline"),
-    supabase.from("contract_discrepancies").select("id,discrepancy_type,status,financial_impact_minor,recommended_check").eq("organisation_id",organisationId).order("created_at",{ascending:false}),
-  ]);
-  const rows=(supplierData??[]) as Supplier[];
-  return <div className="workflow-stack"><div className="split-workspace"><WorkflowForm organisationId={organisationId} workflow="supplier" title="Leverancier toevoegen" submitLabel="Leverancier opslaan" fields={[
-    {name:"name",label:"Naam",required:true},{name:"contactEmail",label:"Contact e-mail",type:"email"},
-  ]}/><RecordPanel title="Leveranciers" empty="Nog geen leveranciers.">{rows.map(row=><div className="record-row" key={row.id}><b>{row.name}</b><span>{row.email||"Geen e-mail"}</span><em>Profiel →</em></div>)}</RecordPanel></div>
-  <RecordPanel title="Contracten en afwijkingen" empty="Leg eerst een leverancier en contractversie vast.">{((contracts??[]) as unknown as {id:string;name:string;status:string;notice_deadline:string|null}[]).map(row=><div className="record-row" key={row.id}><b>{row.name}</b><span>{row.status}</span><em>{row.notice_deadline?`Opzegdeadline ${date(row.notice_deadline)}`:"Geen deadline"}</em></div>)}{((discrepancies??[]) as unknown as {id:string;discrepancy_type:string;status:string;financial_impact_minor:string;recommended_check:string}[]).map(row=><div className="record-row" key={row.id}><b>Neutrale afwijking: {row.discrepancy_type}</b><span>{row.recommended_check}</span><em>{euro(row.financial_impact_minor)} · {row.status}</em></div>)}</RecordPanel></div>;
-}
-
-async function eventYield(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>, organisationId:string, venues:Venue[]) {
-  const [{data:scenarioData},{data:eventData}]=await Promise.all([
-    supabase.from("event_yield_scenarios").select("id,venue_id,event_id,scenario,revenue_low_minor,contribution_minor,break_even_revenue_minor,missing_data,created_at").eq("organisation_id",organisationId).order("created_at",{ascending:false}),
-    supabase.from("events").select("id,name,starts_at").eq("organisation_id",organisationId),
-  ]);
-  const rows=(scenarioData??[]) as unknown as Scenario[]; const events=(eventData??[]) as EventRow[];
-  return <div className="split-workspace"><WorkflowForm organisationId={organisationId} workflow="event_yield" title="Deterministisch basisscenario" submitLabel="Scenario berekenen" fields={[
-    {name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues)},{name:"name",label:"Eventnaam",required:true},{name:"startsAt",label:"Start",type:"datetime-local",required:true},{name:"attendance",label:"Verwachte bezoekers",type:"number",required:true},
-    {name:"ticketRevenue",label:"Ticketomzet (€)",required:true},{name:"barRevenue",label:"Baromzet (€)",required:true},{name:"staffing",label:"Personeel (€)",required:true},{name:"security",label:"Beveiliging (€)",required:true},
-    {name:"entertainment",label:"Entertainment (€)",required:true},{name:"stock",label:"Voorraad/inkoop (€)",required:true},{name:"otherCosts",label:"Overige kosten (€)",required:true},
-  ]}/><RecordPanel title="Scenario's" empty="Nog geen scenario's.">{rows.map(row=><div className="record-row" key={row.id}><b>{events.find(event=>event.id===row.event_id)?.name||"Event"} · {row.scenario}</b><span>Omzet {euro(row.revenue_low_minor)} · break-even {euro(row.break_even_revenue_minor)}</span><em>Bijdrage {euro(row.contribution_minor)}<small>Deterministische modus · geen ML-confidence</small></em></div>)}</RecordPanel></div>;
-}
-
-async function compliance(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>, organisationId:string, venues:Venue[]) {
-  const [{data:staffData},{data:incidentData}]=await Promise.all([
-    supabase.from("staff_profiles").select("id,full_name,role_name,onboarding_status,preferred_language").eq("organisation_id",organisationId).order("full_name"),
-    supabase.from("staff_incidents").select("id,venue_id,occurred_at,category,status,factual_record").eq("organisation_id",organisationId).order("occurred_at",{ascending:false}),
-  ]);
-  const staff=(staffData??[]) as Staff[]; const incidents=(incidentData??[]) as unknown as Incident[];
-  return <div className="workflow-stack"><div className="legal-note">NightProfit helpt beleid en bewijs organiseren. De klant blijft verantwoordelijk voor toepasselijke wetgeving, beleid en deskundig advies.</div><div className="split-workspace">
-    <WorkflowForm organisationId={organisationId} workflow="staff_profile" title="Beperkt medewerkersprofiel" submitLabel="Profiel aanmaken" fields={[
-      {name:"fullName",label:"Volledige naam",required:true},{name:"contactEmail",label:"E-mail",type:"email"},{name:"roleName",label:"Functie",required:true},{name:"engagementType",label:"Type inzet",required:true},
-      {name:"preferredLanguage",label:"Voorkeurstaal",type:"select",required:true,options:[{label:"Nederlands",value:"nl"},{label:"English",value:"en"}]},{name:"startDate",label:"Startdatum",type:"date",required:true},
-    ]}/><RecordPanel title="Onboarding" empty="Nog geen beperkte medewerkersprofielen.">{staff.map(row=><div className="record-row" key={row.id}><b>{row.full_name}</b><span>{row.role_name} · {row.preferred_language.toUpperCase()}</span><em>{row.onboarding_status}</em></div>)}</RecordPanel></div>
-    <div className="split-workspace"><WorkflowForm organisationId={organisationId} workflow="incident" title="Feitelijk incident vastleggen" submitLabel="Conceptincident opslaan" fields={[
-      {name:"venueId",label:"Vestiging",type:"select",required:true,options:venueOptions(venues)},{name:"occurredAt",label:"Datum en tijd",type:"datetime-local",required:true},{name:"category",label:"Categorie",required:true},
-      {name:"factualRecord",label:"Feitelijke beschrijving",type:"textarea",required:true},{name:"witnesses",label:"Getuigen",type:"textarea"},{name:"actions",label:"Ondernomen acties",type:"textarea"},
-    ]}/><RecordPanel title="Beperkte incidenten" empty="Geen incidenten vastgelegd.">{incidents.map(row=><div className="record-row" key={row.id}><b>{row.category} · {date(row.occurred_at)}</b><span>{row.factual_record}</span><em>{row.status}</em></div>)}</RecordPanel></div></div>;
-}
-
-function integrations() {
-  const configured=(name:string)=>Boolean(process.env[name]);
-  const rows=[
-    ["Supabase auth/database/storage",configured("NEXT_PUBLIC_SUPABASE_URL")&&configured("NEXT_PUBLIC_SUPABASE_ANON_KEY"),"Runtimeconfiguratie aanwezig; credentialtest via browser nog geblokkeerd door Sites-allowlist."],
-    ["Stripe billing en deposito's",configured("STRIPE_SECRET_KEY")&&configured("STRIPE_WEBHOOK_SECRET"),"Serverconfiguratie; testmodebewijs blijft vereist."],
-    ["OpenAI extractie",configured("OPENAI_API_KEY"),"Optioneel: voorstellen zijn nooit financieel gezaghebbend."],
-    ["E-mailprovider",configured("RESEND_API_KEY"),"Bij ontbreken: kopieerbare link en handmatig verzenden."],
-    ["Scheduled jobs/cron",configured("CRON_SECRET"),"Geen geplande uitvoering claimen zonder credentialtest."],
-    ["CSV/manual fallback",true,"Beschikbaar als operationele fallback."],
+  const departments = (departmentData ?? []) as unknown as {
+    id: string;
+    venue_id: string;
+    name: string;
+  }[];
+  const roles = (roleData ?? []) as unknown as {
+    id: string;
+    department_id: string;
+    name: string;
+    hourly_cost_minor: string;
+    minimum_staff: number;
+    guests_per_staff: number;
+  }[];
+  const staff = (staffData ?? []) as unknown as {
+    id: string;
+    full_name: string;
+    role_name: string;
+  }[];
+  const intervals = (intervalData ?? []) as unknown as {
+    id: string;
+    venue_id: string;
+    starts_at: string;
+    ends_at: string;
+    expected_guests: number;
+    expected_revenue_minor: string;
+    required_staff: number;
+  }[];
+  const shifts = (shiftData ?? []) as unknown as {
+    id: string;
+    venue_id: string;
+    department_id: string;
+    role_id: string;
+    staff_id: string | null;
+    starts_at: string;
+    ends_at: string;
+    break_minutes: number;
+    hourly_cost_minor: string;
+    status: string;
+  }[];
+  const proposals = (proposalData ?? []) as unknown as {
+    id: string;
+    rationale: string;
+    missing_data: string[];
+    confidence_basis: string;
+    approval_status: string;
+    execution_status: string;
+    created_at: string;
+  }[];
+  const requests = (requestData ?? []) as unknown as {
+    id: string;
+    venue_id: string;
+    starts_at: string;
+    ends_at: string;
+    deadline_at: string;
+    status: string;
+    created_at: string;
+  }[];
+  const recipients = (recipientData ?? []) as unknown as {
+    id: string;
+    request_id: string;
+    staff_id: string;
+    status: string;
+    opened_at: string | null;
+    submitted_at: string | null;
+  }[];
+  const departmentOptions = departments.map((row) => ({
+    label: row.name,
+    value: row.id,
+  }));
+  const roleOptions = roles.map((row) => ({ label: row.name, value: row.id }));
+  const staffOptions = [
+    { label: t("planning.openShift"), value: "open" },
+    ...staff.map((row) => ({
+      label: `${row.full_name} · ${row.role_name}`,
+      value: row.id,
+    })),
   ];
-  return <section className="panel"><div className="record-list">{rows.map(([label,ok,detail])=><div className="record-row" key={String(label)}><b>{label}</b><span>{detail}</span><em className={ok?"ok":"warn"}>{ok?"Geconfigureerd":"Configuratie vereist"}</em></div>)}</div></section>;
+  return (
+    <div className="workflow-stack">
+      <section className="connected-flow">
+        <span>{t("planning.demand")}</span>
+        <b>→</b>
+        <span>{t("planning.forecast")}</span>
+        <b>→</b>
+        <span>{t("planning.schedule")}</span>
+        <b>→</b>
+        <span>{t("planning.publish")}</span>
+        <b>→</b>
+        <span>{t("planning.hours")}</span>
+        <b>→</b>
+        <span>Close & Learn</span>
+      </section>
+      <div className="split-workspace">
+        <AvailabilityManager
+          organisationId={organisationId}
+          venues={venues.map((v) => ({ id: v.id, label: v.name }))}
+          staff={staff.map((person) => ({
+            id: person.id,
+            label: `${person.full_name} · ${person.role_name}`,
+          }))}
+        />
+        <RecordPanel
+          title={t("planning.availabilityRequests")}
+          empty={t("planning.noRequests")}
+        >
+          {requests.map((request) => {
+            const rows = recipients.filter(
+              (row) => row.request_id === request.id,
+            );
+            return (
+              <div className="record-row" key={request.id}>
+                <b>
+                  {venues.find((v) => v.id === request.venue_id)?.name ||
+                    t("common.venue")}{" "}
+                  · {authEnumLabel(locale,request.status)}
+                </b>
+                <span>
+                  {date(request.starts_at,locale)}–{date(request.ends_at,locale)}
+                  <small>
+                    {rows
+                      .map(
+                        (row) =>
+                          `${staff.find((s) => s.id === row.staff_id)?.full_name || t("planning.employee")}: ${authEnumLabel(locale,row.status)}`,
+                      )
+                      .join(" · ")}
+                  </small>
+                </span>
+                <em>
+                  {rows.filter((row) => row.status === "submitted").length}/
+                  {rows.length} {t("planning.submitted")}
+                  <small>{t("availability.deadline")} {date(request.deadline_at,locale)}</small>
+                </em>
+              </div>
+            );
+          })}
+        </RecordPanel>
+      </div>
+      <div className="split-workspace">
+        <WorkflowForm
+          endpoint="/api/planning"
+          organisationId={organisationId}
+          workflow="forecast"
+          title={t("planning.forecastTitle")}
+          submitLabel={t("planning.saveForecast")}
+          fields={[
+            {
+              name: "venueId",
+              label: t("common.venue"),
+              type: "select",
+              required: true,
+              options: venueOptions(venues),
+            },
+            {
+              name: "tradingDate",
+              label: t("planning.tradingDate"),
+              type: "date",
+              required: true,
+            },
+            {
+              name: "startsAt",
+              label: t("planning.intervalStart"),
+              type: "datetime-local",
+              required: true,
+            },
+            {
+              name: "endsAt",
+              label: t("planning.intervalEnd"),
+              type: "datetime-local",
+              required: true,
+            },
+            {
+              name: "expectedGuests",
+              label: t("planning.expectedGuests"),
+              type: "number",
+              required: true,
+            },
+            {
+              name: "expectedRevenue",
+              label: t("planning.expectedRevenue"),
+              required: true,
+            },
+            {
+              name: "minimumStaff",
+              label: t("planning.minimumStaff"),
+              type: "number",
+              required: true,
+            },
+            {
+              name: "guestsPerStaff",
+              label: t("planning.guestsPerStaff"),
+              type: "number",
+              required: true,
+            },
+            {
+              name: "managerNote",
+              label: t("planning.assumptions"),
+              type: "textarea",
+            },
+          ]}
+        />
+        <RecordPanel
+          title={t("planning.demandByInterval")}
+          empty={t("planning.noForecast")}
+        >
+          {intervals.map((row) => (
+            <div className="record-row" key={row.id}>
+              <b>
+                {new Date(row.starts_at).toLocaleString(authIntlLocale(locale), {
+                  dateStyle: "short",
+                  timeStyle: "short",
+                })}
+              </b>
+              <span>
+                {row.expected_guests} {t("planning.guests")} · {row.required_staff} {t("planning.staffRequired")}
+              </span>
+              <em>{euro(row.expected_revenue_minor,locale)}</em>
+            </div>
+          ))}
+        </RecordPanel>
+      </div>
+      {!departments.length ? (
+        <div className="split-workspace">
+          <WorkflowForm
+            endpoint="/api/planning"
+            organisationId={organisationId}
+            workflow="department"
+            title={t("planning.firstDepartment")}
+            submitLabel={t("planning.addDepartment")}
+            fields={[
+              {
+                name: "venueId",
+                label: t("common.venue"),
+                type: "select",
+                required: true,
+                options: venueOptions(venues),
+              },
+              {
+                name: "name",
+                label: t("planning.departmentName"),
+                required: true,
+                placeholder: t("planning.departmentPlaceholder"),
+              },
+            ]}
+          />
+          <div className="legal-note">
+            {t("planning.departmentFirst")}
+          </div>
+        </div>
+      ) : !roles.length ? (
+        <WorkflowForm
+          endpoint="/api/planning"
+          organisationId={organisationId}
+          workflow="role"
+          title={t("planning.firstRole")}
+          submitLabel={t("planning.addRole")}
+          fields={[
+            {
+              name: "departmentId",
+              label: t("planning.department"),
+              type: "select",
+              required: true,
+              options: departmentOptions,
+            },
+            { name: "name", label: t("planning.roleName"), required: true },
+            {
+              name: "hourlyCost",
+              label: t("planning.allInCost"),
+              required: true,
+            },
+            {
+              name: "minimumStaff",
+              label: t("planning.minimumStaff"),
+              type: "number",
+              required: true,
+            },
+            {
+              name: "guestsPerStaff",
+              label: t("planning.guestsPerStaff"),
+              type: "number",
+              required: true,
+            },
+          ]}
+        />
+      ) : (
+        <div className="split-workspace">
+          <WorkflowForm
+            endpoint="/api/planning"
+            organisationId={organisationId}
+            workflow="shift"
+            title={t("planning.draftShift")}
+            submitLabel={t("planning.addShift")}
+            fields={[
+              {
+                name: "venueId",
+                label: t("common.venue"),
+                type: "select",
+                required: true,
+                options: venueOptions(venues),
+              },
+              {
+                name: "departmentId",
+                label: t("planning.department"),
+                type: "select",
+                required: true,
+                options: departmentOptions,
+              },
+              {
+                name: "roleId",
+                label: t("planning.role"),
+                type: "select",
+                required: true,
+                options: roleOptions,
+              },
+              {
+                name: "staffId",
+                label: t("planning.employee"),
+                type: "select",
+                required: true,
+                options: staffOptions,
+              },
+              {
+                name: "startsAt",
+                label: t("planning.start"),
+                type: "datetime-local",
+                required: true,
+              },
+              {
+                name: "endsAt",
+                label: t("planning.end"),
+                type: "datetime-local",
+                required: true,
+              },
+              {
+                name: "breakMinutes",
+                label: t("planning.break"),
+                type: "number",
+                required: true,
+              },
+              { name: "hourlyCost", label: t("planning.hourlyCost"), required: true },
+            ]}
+          />
+          <RecordPanel
+            title={t("planning.roster")}
+            empty={t("planning.noShifts")}
+          >
+            {shifts.map((row) => (
+              <div className="record-row" key={row.id}>
+                <b>
+                  {staff.find((person) => person.id === row.staff_id)
+                    ?.full_name || t("planning.openShift")}{" "}
+                  ·{" "}
+                  {roles.find((role) => role.id === row.role_id)?.name || t("planning.role")}
+                </b>
+                <span>
+                  {new Date(row.starts_at).toLocaleString(authIntlLocale(locale), {
+                    dateStyle: "short",
+                    timeStyle: "short",
+                  })}
+                  –
+                  {new Date(row.ends_at).toLocaleTimeString(authIntlLocale(locale), {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </span>
+                <em>{authEnumLabel(locale,row.status)}</em>
+              </div>
+            ))}
+          </RecordPanel>
+        </div>
+      )}
+      <div className="split-workspace">
+        <WorkflowForm
+          endpoint="/api/planning"
+          organisationId={organisationId}
+          workflow="publish"
+          title={t("planning.publishTitle")}
+          submitLabel={t("planning.publishChecked")}
+          fields={[
+            {
+              name: "venueId",
+              label: t("common.venue"),
+              type: "select",
+              required: true,
+              options: venueOptions(venues),
+            },
+            {
+              name: "startsAt",
+              label: t("availability.periodStart"),
+              type: "datetime-local",
+              required: true,
+            },
+            {
+              name: "endsAt",
+              label: t("availability.periodEnd"),
+              type: "datetime-local",
+              required: true,
+            },
+          ]}
+        />
+        <WorkflowForm
+          endpoint="/api/planning"
+          organisationId={organisationId}
+          workflow="proposal"
+          title={t("planning.explainableCheck")}
+          submitLabel={t("planning.generateProposal")}
+          fields={[
+            {
+              name: "venueId",
+              label: t("common.venue"),
+              type: "select",
+              required: true,
+              options: venueOptions(venues),
+            },
+            {
+              name: "tradingDate",
+              label: t("planning.tradingDate"),
+              type: "date",
+              required: true,
+            },
+          ]}
+        />
+      </div>
+      <RecordPanel
+        title={t("planning.governedProposals")}
+        empty={t("planning.noProposals")}
+      >
+        {proposals.map((row) => (
+          <div className="record-row" key={row.id}>
+            <b>
+              {authEnumLabel(locale,row.approval_status)} · {date(row.created_at,locale)}
+            </b>
+            <span>
+              {row.rationale}
+              <small>{row.confidence_basis}</small>
+            </span>
+            <em>
+              {authEnumLabel(locale,row.execution_status)}
+              {row.missing_data.length ? (
+                <small>{row.missing_data.join(" ")}</small>
+              ) : null}
+            </em>
+          </div>
+        ))}
+      </RecordPanel>
+    </div>
+  );
 }
 
-function RecordPanel({title,empty,children}:{title:string;empty:string;children:React.ReactNode}) {
-  const list=Array.isArray(children)?children.filter(Boolean):children;
-  const isEmpty=Array.isArray(list)&&list.length===0;
-  return <section className="panel record-panel"><header><div><h3>{title}</h3></div></header>{isEmpty?<div className="empty-state"><p>{empty}</p></div>:<div className="record-list">{list}</div>}</section>;
+async function myWork(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  organisationId: string,
+  venues: Venue[],
+  userId: string,
+  locale: AuthLocale,
+) {
+  const t=(key:AuthMessageKey)=>authMessage(locale,key);
+  const { data: profile } = await supabase
+    .from("staff_profiles")
+    .select("id,full_name")
+    .eq("organisation_id", organisationId)
+    .eq("auth_user_id", userId)
+    .maybeSingle();
+  if (!profile)
+    return (
+      <section className="panel">
+        <div className="empty-state">
+          <h2>{t("myWork.profileRequired")}</h2>
+          <p>{t("myWork.profileHelp")}</p>
+        </div>
+      </section>
+    );
+  const staff = profile as unknown as { id: string; full_name: string };
+  const [
+    { data: shiftData },
+    { data: responseData },
+    { data: timeData },
+    { data: availabilityData },
+  ] = await Promise.all([
+    supabase
+      .from("shifts")
+      .select("id,venue_id,starts_at,ends_at,break_minutes,status")
+      .eq("organisation_id", organisationId)
+      .eq("staff_id", staff.id)
+      .gte("ends_at", new Date().toISOString())
+      .order("starts_at")
+      .limit(14),
+    supabase
+      .from("shift_responses")
+      .select("shift_id,response")
+      .eq("organisation_id", organisationId)
+      .eq("staff_id", staff.id),
+    supabase
+      .from("time_records")
+      .select(
+        "id,venue_id,clocked_in_at,clocked_out_at,break_minutes,status,approved_at",
+      )
+      .eq("organisation_id", organisationId)
+      .eq("staff_id", staff.id)
+      .order("clocked_in_at", { ascending: false })
+      .limit(14),
+    supabase
+      .from("staff_availability")
+      .select("id,starts_at,ends_at,availability")
+      .eq("organisation_id", organisationId)
+      .eq("staff_id", staff.id)
+      .gte("ends_at", new Date().toISOString())
+      .order("starts_at")
+      .limit(14),
+  ]);
+  const shifts = (shiftData ?? []) as unknown as {
+    id: string;
+    venue_id: string;
+    starts_at: string;
+    ends_at: string;
+    break_minutes: number;
+    status: string;
+  }[];
+  const responses = (responseData ?? []) as unknown as {
+    shift_id: string;
+    response: string;
+  }[];
+  const records = (timeData ?? []) as unknown as {
+    id: string;
+    venue_id: string;
+    clocked_in_at: string;
+    clocked_out_at: string | null;
+    break_minutes: number;
+    status: string;
+    approved_at: string | null;
+  }[];
+  const availability = (availabilityData ?? []) as unknown as {
+    id: string;
+    starts_at: string;
+    ends_at: string;
+    availability: string;
+  }[];
+  const openRecord = records.find((record) => !record.clocked_out_at);
+  const next = shifts[0];
+  return (
+    <div className="workflow-stack employee-work">
+      <section className="morning-brief">
+        <div>
+          <div className="eyebrow">{t("myWork.eyebrow")} · {staff.full_name}</div>
+          <h2>
+            {next
+              ? `${t("myWork.nextShift")} ${new Date(next.starts_at).toLocaleString(authIntlLocale(locale), { weekday: "long", hour: "2-digit", minute: "2-digit" })}`
+              : t("myWork.noNextShift")}
+          </h2>
+          <p>{t("myWork.privateHelp")}</p>
+        </div>
+        <span className="status">
+          {openRecord ? t("myWork.clockedIn") : t("myWork.notClockedIn")}
+        </span>
+      </section>
+      {openRecord ? (
+        <WorkflowForm
+          endpoint="/api/workforce"
+          organisationId={organisationId}
+          workflow="clock_out"
+          title={t("myWork.activeShift")}
+          submitLabel={t("myWork.clockOut")}
+          fields={[
+            {
+              name: "timeRecordId",
+              label: t("myWork.timeRecord"),
+              type: "select",
+              required: true,
+              options: [
+                {
+                  label: `${t("myWork.started")} ${new Date(openRecord.clocked_in_at).toLocaleTimeString(authIntlLocale(locale), { hour: "2-digit", minute: "2-digit" })}`,
+                  value: openRecord.id,
+                },
+              ],
+            },
+          ]}
+        />
+      ) : next ? (
+        <WorkflowForm
+          endpoint="/api/workforce"
+          organisationId={organisationId}
+          workflow="clock_in"
+          title={t("myWork.attendance")}
+          submitLabel={t("myWork.clockIn")}
+          fields={[
+            {
+              name: "venueId",
+              label: t("common.venue"),
+              type: "select",
+              required: true,
+              options: venueOptions(
+                venues.filter((v) => v.id === next.venue_id),
+              ),
+            },
+            {
+              name: "shiftId",
+              label: t("myWork.shift"),
+              type: "select",
+              required: true,
+              options: [
+                {
+                  label: new Date(next.starts_at).toLocaleString(authIntlLocale(locale)),
+                  value: next.id,
+                },
+              ],
+            },
+          ]}
+        />
+      ) : null}
+      <section className="mobile-roster" aria-label={t("myWork.upcomingSchedule")}>
+        {shifts.length ? (
+          shifts.map((shift) => (
+            <article key={shift.id}>
+              <div>
+                <b>
+                  {new Date(shift.starts_at).toLocaleDateString(authIntlLocale(locale), {
+                    weekday: "long",
+                    day: "numeric",
+                    month: "short",
+                  })}
+                </b>
+                <span>
+                  {new Date(shift.starts_at).toLocaleTimeString(authIntlLocale(locale), {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                  –
+                  {new Date(shift.ends_at).toLocaleTimeString(authIntlLocale(locale), {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}{" "}
+                  · {t("myWork.break")} {shift.break_minutes} min
+                </span>
+              </div>
+              <em>
+                {authEnumLabel(locale,responses.find((r) => r.shift_id === shift.id)?.response || shift.status)}
+              </em>
+              {!responses.some((r) => r.shift_id === shift.id) &&
+              shift.status === "published" ? (
+                <WorkflowForm
+                  endpoint="/api/workforce"
+                  organisationId={organisationId}
+                  workflow="respond"
+                  title={t("myWork.confirmShift")}
+                  submitLabel={t("myWork.saveResponse")}
+                  fields={[
+                    {
+                      name: "venueId",
+                      label: t("common.venue"),
+                      type: "select",
+                      required: true,
+                      options: [
+                        {
+                          label:
+                            venues.find((v) => v.id === shift.venue_id)?.name ||
+                            t("common.venue"),
+                          value: shift.venue_id,
+                        },
+                      ],
+                    },
+                    {
+                      name: "shiftId",
+                      label: t("myWork.shift"),
+                      type: "select",
+                      required: true,
+                      options: [
+                        {
+                          label: new Date(shift.starts_at).toLocaleString(
+                            authIntlLocale(locale),
+                          ),
+                          value: shift.id,
+                        },
+                      ],
+                    },
+                    {
+                      name: "staffId",
+                      label: t("planning.employee"),
+                      type: "select",
+                      required: true,
+                      options: [{ label: staff.full_name, value: staff.id }],
+                    },
+                    {
+                      name: "response",
+                      label: t("myWork.response"),
+                      type: "select",
+                      required: true,
+                      options: [
+                        { label: t("myWork.accept"), value: "accepted" },
+                        { label: t("myWork.reject"), value: "rejected" },
+                      ],
+                    },
+                    { name: "reason", label: t("myWork.rejectReason") },
+                  ]}
+                />
+              ) : null}
+            </article>
+          ))
+        ) : (
+          <div className="empty-state">
+            <p>{t("myWork.noShifts")}</p>
+          </div>
+        )}
+      </section>
+      <div className="split-workspace">
+        <RecordPanel
+          title={t("myWork.availability")}
+          empty={t("myWork.noAvailability")}
+        >
+          {availability.map((row) => (
+            <div className="record-row" key={row.id}>
+              <b>{authEnumLabel(locale,row.availability)}</b>
+              <span>{new Date(row.starts_at).toLocaleString(authIntlLocale(locale))}</span>
+              <em>
+                {t("myWork.until")}{" "}
+                {new Date(row.ends_at).toLocaleTimeString(authIntlLocale(locale), {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </em>
+            </div>
+          ))}
+        </RecordPanel>
+        <RecordPanel title={t("myWork.submittedHours")} empty={t("myWork.noHours")}>
+          {records.map((row) => (
+            <div className="record-row" key={row.id}>
+              <b>{date(row.clocked_in_at,locale)}</b>
+              <span>
+                {authEnumLabel(locale,row.status)} · {t("myWork.break")} {row.break_minutes} min
+              </span>
+              <em>{row.approved_at ? t("myWork.approved") : t("myWork.pending")}</em>
+            </div>
+          ))}
+        </RecordPanel>
+      </div>
+    </div>
+  );
 }
-function HonestEmpty({title}:{title:string}) { return <section className="panel"><div className="empty-state"><h2>{title}</h2><p>Deze route bevat nog geen geverifieerde gegevens of actieve workflow. Er worden geen fictieve productieclaims getoond.</p></div></section>; }
+
+function Metric({
+  href,
+  label,
+  value,
+  detail,
+}: {
+  href: string;
+  label: string;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <Link href={href} className="metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{detail} →</small>
+    </Link>
+  );
+}
+
+function closeList(venues: Venue[], closes: Close[], locale:AuthLocale) {
+  const t=(key:AuthMessageKey)=>authMessage(locale,key);
+  return (
+    <section className="panel">
+      <header>
+        <div>
+          <h3>{t("close.listTitle")}</h3>
+          <p>{t("close.listHelp")}</p>
+        </div>
+      </header>
+      {!closes.length ? (
+        <div className="empty-state">
+          <h3>{t("close.emptyTitle")}</h3>
+          <p>{t("close.emptyHelp")}</p>
+          <Link className="primary" href="/app/close/new">
+            {t("close.first")}
+          </Link>
+        </div>
+      ) : (
+        <div className="record-list">
+          {closes.map((close) => (
+            <Link key={close.id} href={`/app/close/${close.id}`}>
+              <b>
+                {close.trading_date} · v{close.version}
+              </b>
+              <span>
+                {venues.find((v) => v.id === close.venue_id)?.name} ·{" "}
+                {authEnumLabel(locale,close.status)}
+              </span>
+              <em>{euro(close.difference_minor,locale)} →</em>
+            </Link>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+async function closeDetail(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  organisationId: string,
+  closeId: string,
+  venues: Venue[],
+  locale: AuthLocale,
+) {
+  const t=(key:AuthMessageKey)=>authMessage(locale,key);
+  const [
+    { data: close },
+    { data: lines },
+    { data: audit },
+    { data: canApprove },
+    { data: canReopen },
+  ] = await Promise.all([
+    supabase
+      .from("closing_sessions")
+      .select(
+        "id,venue_id,trading_date,status,version,expected_total_minor,accounted_total_minor,difference_minor,reopened_reason",
+      )
+      .eq("organisation_id", organisationId)
+      .eq("id", closeId)
+      .single(),
+    supabase
+      .from("closing_lines")
+      .select("id,line_type,expected_minor,actual_minor,metadata,created_at")
+      .eq("organisation_id", organisationId)
+      .eq("closing_session_id", closeId)
+      .order("created_at"),
+    supabase
+      .from("audit_logs")
+      .select("id,action,actor_id,created_at,after_summary")
+      .eq("organisation_id", organisationId)
+      .eq("entity_id", closeId)
+      .order("created_at", { ascending: false })
+      .limit(30),
+    supabase.rpc("has_capability", {
+      target_organisation_id: organisationId,
+      target_venue_id: null,
+      required_capability: "close.approve",
+    }),
+    supabase.rpc("has_capability", {
+      target_organisation_id: organisationId,
+      target_venue_id: null,
+      required_capability: "close.reopen",
+    }),
+  ]);
+  if (!close) return <HonestEmpty title={t("close.notFound")} locale={locale} />;
+  const row = close as unknown as Close & { reopened_reason: string | null };
+  const lineRows = (lines ?? []) as unknown as {
+    id: string;
+    line_type: string;
+    expected_minor: string;
+    actual_minor: string;
+    metadata: { note?: string };
+  }[];
+  const expected = lineRows.reduce(
+    (sum, line) => sum + BigInt(line.expected_minor),
+    0n,
+  );
+  const actual = lineRows.reduce(
+    (sum, line) => sum + BigInt(line.actual_minor),
+    0n,
+  );
+  return (
+    <div className="workflow-stack">
+      <section className="detail-head">
+        <div>
+          <span className={`status ${row.status}`}>{authEnumLabel(locale,row.status)}</span>
+          <h2>
+            {row.trading_date} · {t("close.version")} {row.version}
+          </h2>
+          <p>
+            {venues.find((v) => v.id === row.venue_id)?.name}
+            {row.reopened_reason ? ` · ${t("close.reopened")}: ${row.reopened_reason}` : ""}
+          </p>
+        </div>
+        <div className="money-summary">
+          <span>
+            {t("close.expected")} <b>{euro(expected,locale)}</b>
+          </span>
+          <span>
+            {t("close.actual")} <b>{euro(actual,locale)}</b>
+          </span>
+          <span>
+            {t("close.difference")} <b>{euro(actual - expected,locale)}</b>
+          </span>
+        </div>
+      </section>
+      <CloseWorkspace
+        organisationId={organisationId}
+        closeId={closeId}
+        status={row.status}
+        canApprove={Boolean(canApprove)}
+        canReopen={Boolean(canReopen)}
+      />
+      <section className="panel">
+        <header>
+          <div>
+            <h3>{t("close.amountLines")}</h3>
+            <p>{t("close.amountHelp")}</p>
+          </div>
+        </header>
+        {!lineRows.length ? (
+          <div className="empty-state">
+            <p>{t("close.noLines")}</p>
+          </div>
+        ) : (
+          <div className="record-list">
+            {lineRows.map((line) => (
+              <div className="record-row" key={line.id}>
+                <b>{authEnumLabel(locale,line.line_type)}</b>
+                <span>{line.metadata.note || t("close.noNote")}</span>
+                <em>
+                  {euro(line.expected_minor,locale)} → {euro(line.actual_minor,locale)}
+                </em>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+      <section className="panel">
+        <header>
+          <div>
+            <h3>{t("close.audit")}</h3>
+            <p>{t("close.auditHelp")}</p>
+          </div>
+        </header>
+        <div className="record-list">
+          {(
+            (audit ?? []) as unknown as {
+              id: string;
+              action: string;
+              actor_id: string;
+              created_at: string;
+            }[]
+          ).map((item) => (
+            <div className="record-row" key={item.id}>
+              <b>{authEnumLabel(locale,item.action)}</b>
+              <span>{item.actor_id}</span>
+              <em>{date(item.created_at,locale)}</em>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+async function bookings(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  organisationId: string,
+  venues: Venue[],
+  locale: AuthLocale,
+) {
+  const t=(key:AuthMessageKey)=>authMessage(locale,key);
+  const { data } = await supabase
+    .from("booking_inquiries")
+    .select(
+      "id,venue_id,status,preferred_start,group_size,contact_name,occasion,budget_minor",
+    )
+    .eq("organisation_id", organisationId)
+    .order("preferred_start");
+  const rows = (data ?? []) as Inquiry[];
+  return (
+    <div className="split-workspace">
+      <WorkflowForm
+        organisationId={organisationId}
+        workflow="booking_inquiry"
+        title={t("bookings.new")}
+        submitLabel={t("bookings.record")}
+        fields={[
+          {
+            name: "venueId",
+            label: t("common.venue"),
+            type: "select",
+            required: true,
+            options: venueOptions(venues),
+          },
+          { name: "contactName", label: t("bookings.contactName"), required: true },
+          {
+            name: "contactEmail",
+            label: t("auth.email"),
+            type: "email",
+            required: true,
+          },
+          {
+            name: "preferredStart",
+            label: t("bookings.preferredStart"),
+            type: "datetime-local",
+            required: true,
+          },
+          {
+            name: "groupSize",
+            label: t("bookings.groupSize"),
+            type: "number",
+            required: true,
+          },
+          { name: "budget", label: t("bookings.budget"), placeholder: locale==="nl"?"1500,00":"1500.00" },
+          { name: "occasion", label: t("bookings.occasion") },
+          {
+            name: "source",
+            label: t("bookings.source"),
+            required: true,
+            placeholder: t("bookings.sourcePlaceholder"),
+          },
+          {
+            name: "preferences",
+            label: t("bookings.preferences"),
+            type: "textarea",
+          },
+        ]}
+      />
+      <RecordPanel title={t("bookings.pipeline")} empty={t("bookings.empty")}>
+        {rows.map((row) => (
+          <div className="record-row" key={row.id}>
+            <b>
+              {row.contact_name} · {row.group_size} {t("planning.guests")}
+            </b>
+            <span>
+              {date(row.preferred_start,locale)} · {row.occasion || t("bookings.noOccasion")}{" "}
+              · {authEnumLabel(locale,row.status)}
+            </span>
+            <em>
+              {row.budget_minor ? euro(row.budget_minor,locale) : t("bookings.budgetUnknown")}
+            </em>
+          </div>
+        ))}
+      </RecordPanel>
+    </div>
+  );
+}
+
+async function productsAndRecipes(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  organisationId: string,
+  venues: Venue[],
+  locale: AuthLocale,
+) {
+  const t=(key:AuthMessageKey)=>authMessage(locale,key);
+  const [
+    { data: supplierData },
+    { data: productData },
+    { data: costData },
+    { data: itemData },
+    { data: priceData },
+  ] = await Promise.all([
+    supabase
+      .from("suppliers")
+      .select("id,name")
+      .eq("organisation_id", organisationId)
+      .order("name"),
+    supabase
+      .from("products")
+      .select(
+        "id,name,brand,category,sku,package_quantity,purchase_unit,serving_unit,supplier_id",
+      )
+      .eq("organisation_id", organisationId)
+      .order("name"),
+    supabase
+      .from("product_cost_history")
+      .select("product_id,net_cost_minor,vat_basis_points,effective_at")
+      .eq("organisation_id", organisationId)
+      .order("effective_at", { ascending: false }),
+    supabase
+      .from("menu_items")
+      .select("id,venue_id,name,category,target_margin_basis_points")
+      .eq("organisation_id", organisationId)
+      .order("name"),
+    supabase
+      .from("menu_price_history")
+      .select(
+        "menu_item_id,gross_price_minor,direct_cost_snapshot_minor,margin_snapshot_basis_points,effective_at",
+      )
+      .eq("organisation_id", organisationId)
+      .order("effective_at", { ascending: false }),
+  ]);
+  const suppliers = (supplierData ?? []) as unknown as {
+    id: string;
+    name: string;
+  }[];
+  const products = (productData ?? []) as unknown as {
+    id: string;
+    name: string;
+    brand: string | null;
+    category: string;
+    sku: string | null;
+    package_quantity: string;
+    purchase_unit: string;
+    serving_unit: string;
+    supplier_id: string | null;
+  }[];
+  const costs = (costData ?? []) as unknown as {
+    product_id: string;
+    net_cost_minor: string;
+    vat_basis_points: number;
+    effective_at: string;
+  }[];
+  const items = (itemData ?? []) as unknown as {
+    id: string;
+    venue_id: string | null;
+    name: string;
+    category: string;
+    target_margin_basis_points: number;
+  }[];
+  const prices = (priceData ?? []) as unknown as {
+    menu_item_id: string;
+    gross_price_minor: string;
+    direct_cost_snapshot_minor: string;
+    margin_snapshot_basis_points: number;
+    effective_at: string;
+  }[];
+  const supplierOptions = [
+    { label: t("products.noPreferredSupplier"), value: "" },
+    ...suppliers.map((row) => ({ label: row.name, value: row.id })),
+  ];
+  const productOptions = products.map((row) => ({
+    label: `${row.name} · ${row.serving_unit}`,
+    value: row.id,
+  }));
+  return (
+    <div className="workflow-stack">
+      <section className="connected-flow">
+        <span>{t("products.supplier")}</span>
+        <b>→</b>
+        <span>{t("products.productPrice")}</span>
+        <b>→</b>
+        <span>{t("products.recipeCost")}</span>
+        <b>→</b>
+        <span>{t("products.menuPrice")}</span>
+        <b>→</b>
+        <span>{t("products.marginSnapshot")}</span>
+      </section>
+      <div className="split-workspace">
+        <WorkflowForm
+          organisationId={organisationId}
+          workflow="product"
+          title={t("products.currentCost")}
+          submitLabel={t("products.save")}
+          fields={[
+            {
+              name: "supplierId",
+              label: t("products.preferredSupplier"),
+              type: "select",
+              options: supplierOptions,
+            },
+            { name: "name", label: t("products.name"), required: true },
+            { name: "brand", label: t("products.brand") },
+            { name: "category", label: t("products.category"), required: true },
+            { name: "sku", label: t("products.sku") },
+            { name: "barcode", label: t("products.barcode") },
+            {
+              name: "packageQuantity",
+              label: t("products.packageQuantity"),
+              type: "number",
+              required: true,
+            },
+            {
+              name: "unitVolumeMl",
+              label: t("products.volume"),
+              type: "number",
+            },
+            {
+              name: "purchaseUnit",
+              label: t("products.purchaseUnit"),
+              required: true,
+              placeholder: t("products.purchaseUnitPlaceholder"),
+            },
+            {
+              name: "servingUnit",
+              label: t("products.servingUnit"),
+              required: true,
+              placeholder: t("products.servingUnitPlaceholder"),
+            },
+            { name: "netCost", label: t("products.netCost"), required: true },
+            {
+              name: "vatBasisPoints",
+              label: t("products.vat"),
+              type: "select",
+              required: true,
+              options: [
+                { label: "9%", value: "900" },
+                { label: "21%", value: "2100" },
+                { label: "0%", value: "0" },
+              ],
+            },
+            { name: "deposit", label: t("products.deposit"), placeholder: locale==="nl"?"0,00":"0.00" },
+          ]}
+        />
+        <RecordPanel
+          title={t("products.master")}
+          empty={t("products.masterEmpty")}
+        >
+          {products.map((row) => {
+            const cost = costs.find((c) => c.product_id === row.id);
+            return (
+              <div className="record-row" key={row.id}>
+                <b>
+                  {row.name}
+                  {row.brand ? ` · ${row.brand}` : ""}
+                </b>
+                <span>
+                  {row.category} · {row.package_quantity} {row.serving_unit} {t("products.per")}{" "}
+                  {row.purchase_unit}
+                  <small>
+                    {row.sku || t("products.noSku")} ·{" "}
+                    {suppliers.find((s) => s.id === row.supplier_id)?.name ||
+                      t("products.noPreferredSupplier")}
+                  </small>
+                </span>
+                <em>
+                  {cost ? euro(cost.net_cost_minor,locale) : t("products.priceMissing")}
+                  <small>
+                    {cost
+                      ? `${cost.vat_basis_points / 100}% ${t("products.vat")} · ${date(cost.effective_at,locale)}`
+                      : ""}
+                  </small>
+                </em>
+              </div>
+            );
+          })}
+        </RecordPanel>
+      </div>
+      {products.length ? (
+        <div className="split-workspace">
+          <WorkflowForm
+            organisationId={organisationId}
+            workflow="menu_item"
+            title={t("products.menuItemRecipe")}
+            submitLabel={t("products.saveRecipe")}
+            fields={[
+              {
+                name: "venueId",
+                label: t("common.venue"),
+                type: "select",
+                required: true,
+                options: venueOptions(venues),
+              },
+              { name: "name", label: t("products.menuItem"), required: true },
+              { name: "category", label: t("products.category"), required: true },
+              {
+                name: "productId",
+                label: t("products.component"),
+                type: "select",
+                required: true,
+                options: productOptions,
+              },
+              {
+                name: "quantity",
+                label: t("products.recipeQuantity"),
+                type: "number",
+                required: true,
+              },
+              {
+                name: "unit",
+                label: t("products.exactUnit"),
+                required: true,
+              },
+              {
+                name: "wasteBasisPoints",
+                label: t("products.waste"),
+                type: "number",
+                required: true,
+              },
+              {
+                name: "grossPrice",
+                label: t("products.grossPrice"),
+                required: true,
+              },
+              {
+                name: "vatBasisPoints",
+                label: t("products.vat"),
+                type: "select",
+                required: true,
+                options: [
+                  { label: "9%", value: "900" },
+                  { label: "21%", value: "2100" },
+                ],
+              },
+              {
+                name: "targetMarginBasisPoints",
+                label: t("products.targetMargin"),
+                type: "number",
+                required: true,
+              },
+            ]}
+          />
+          <RecordPanel
+            title={t("products.prices")}
+            empty={t("products.noMenuItems")}
+          >
+            {items.map((row) => {
+              const price = prices.find((p) => p.menu_item_id === row.id);
+              return (
+                <div className="record-row" key={row.id}>
+                  <b>
+                    {row.name} · {row.category}
+                  </b>
+                  <span>
+                    {venues.find((v) => v.id === row.venue_id)?.name ||
+                      t("products.allVenues")}
+                    <small>
+                      {t("products.margin")} {row.target_margin_basis_points / 100}%
+                    </small>
+                  </span>
+                  <em>
+                    {price ? euro(price.gross_price_minor,locale) : t("products.priceMissing")}
+                    <small>
+                      {price
+                        ? `${t("products.cost")} ${euro(price.direct_cost_snapshot_minor,locale)} · ${t("products.actualMargin")} ${price.margin_snapshot_basis_points / 100}%`
+                        : ""}
+                    </small>
+                  </em>
+                </div>
+              );
+            })}
+          </RecordPanel>
+        </div>
+      ) : (
+        <div className="legal-note">
+          {t("products.createFirst")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+async function suppliers(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  organisationId: string,
+  locale: AuthLocale,
+) {
+  const t=(key:AuthMessageKey)=>authMessage(locale,key);
+  const [{ data: supplierData }, { data: contracts }, { data: discrepancies }] =
+    await Promise.all([
+      supabase
+        .from("suppliers")
+        .select("id,name,email")
+        .eq("organisation_id", organisationId)
+        .order("name"),
+      supabase
+        .from("supplier_contracts")
+        .select("id,name,status,start_date,end_date,notice_deadline")
+        .eq("organisation_id", organisationId)
+        .order("notice_deadline"),
+      supabase
+        .from("contract_discrepancies")
+        .select(
+          "id,discrepancy_type,status,financial_impact_minor,recommended_check",
+        )
+        .eq("organisation_id", organisationId)
+        .order("created_at", { ascending: false }),
+    ]);
+  const rows = (supplierData ?? []) as Supplier[];
+  return (
+    <div className="workflow-stack">
+      <div className="split-workspace">
+        <WorkflowForm
+          organisationId={organisationId}
+          workflow="supplier"
+          title={t("suppliers.add")}
+          submitLabel={t("suppliers.save")}
+          fields={[
+            { name: "name", label: t("suppliers.name"), required: true },
+            { name: "contactEmail", label: t("suppliers.contactEmail"), type: "email" },
+          ]}
+        />
+        <RecordPanel title={t("suppliers.title")} empty={t("suppliers.empty")}>
+          {rows.map((row) => (
+            <div className="record-row" key={row.id}>
+              <b>{row.name}</b>
+              <span>{row.email || t("suppliers.noEmail")}</span>
+              <em>{t("suppliers.profile")} →</em>
+            </div>
+          ))}
+        </RecordPanel>
+      </div>
+      <RecordPanel
+        title={t("suppliers.contracts")}
+        empty={t("suppliers.contractsEmpty")}
+      >
+        {(
+          (contracts ?? []) as unknown as {
+            id: string;
+            name: string;
+            status: string;
+            notice_deadline: string | null;
+          }[]
+        ).map((row) => (
+          <div className="record-row" key={row.id}>
+            <b>{row.name}</b>
+            <span>{authEnumLabel(locale,row.status)}</span>
+            <em>
+              {row.notice_deadline
+                ? `${t("suppliers.noticeDeadline")} ${date(row.notice_deadline,locale)}`
+                : t("suppliers.noDeadline")}
+            </em>
+          </div>
+        ))}
+        {(
+          (discrepancies ?? []) as unknown as {
+            id: string;
+            discrepancy_type: string;
+            status: string;
+            financial_impact_minor: string;
+            recommended_check: string;
+          }[]
+        ).map((row) => (
+          <div className="record-row" key={row.id}>
+            <b>{t("suppliers.neutralVariance")}: {authEnumLabel(locale,row.discrepancy_type)}</b>
+            <span>{row.recommended_check}</span>
+            <em>
+              {euro(row.financial_impact_minor,locale)} · {authEnumLabel(locale,row.status)}
+            </em>
+          </div>
+        ))}
+      </RecordPanel>
+    </div>
+  );
+}
+
+async function eventYield(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  organisationId: string,
+  venues: Venue[],
+  locale: AuthLocale,
+) {
+  const t=(key:AuthMessageKey)=>authMessage(locale,key);
+  const [{ data: scenarioData }, { data: eventData }] = await Promise.all([
+    supabase
+      .from("event_yield_scenarios")
+      .select(
+        "id,venue_id,event_id,scenario,revenue_low_minor,contribution_minor,break_even_revenue_minor,missing_data,created_at",
+      )
+      .eq("organisation_id", organisationId)
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("events")
+      .select("id,name,starts_at")
+      .eq("organisation_id", organisationId),
+  ]);
+  const rows = (scenarioData ?? []) as unknown as Scenario[];
+  const events = (eventData ?? []) as EventRow[];
+  return (
+    <div className="split-workspace">
+      <WorkflowForm
+        organisationId={organisationId}
+        workflow="event_yield"
+        title={t("yield.baseScenario")}
+        submitLabel={t("yield.calculate")}
+        fields={[
+          {
+            name: "venueId",
+            label: t("common.venue"),
+            type: "select",
+            required: true,
+            options: venueOptions(venues),
+          },
+          { name: "name", label: t("yield.eventName"), required: true },
+          {
+            name: "startsAt",
+            label: t("planning.start"),
+            type: "datetime-local",
+            required: true,
+          },
+          {
+            name: "attendance",
+            label: t("yield.attendance"),
+            type: "number",
+            required: true,
+          },
+          { name: "ticketRevenue", label: t("yield.ticketRevenue"), required: true },
+          { name: "barRevenue", label: t("yield.barRevenue"), required: true },
+          { name: "staffing", label: t("yield.staffing"), required: true },
+          { name: "security", label: t("yield.security"), required: true },
+          { name: "entertainment", label: t("yield.entertainment"), required: true },
+          { name: "stock", label: t("yield.stock"), required: true },
+          { name: "otherCosts", label: t("yield.otherCosts"), required: true },
+        ]}
+      />
+      <RecordPanel title={t("yield.scenarios")} empty={t("yield.empty")}>
+        {rows.map((row) => (
+          <div className="record-row" key={row.id}>
+            <b>
+              {events.find((event) => event.id === row.event_id)?.name ||
+                t("yield.event")}{" "}
+              · {row.scenario}
+            </b>
+            <span>
+              {t("yield.revenue")} {euro(row.revenue_low_minor,locale)} · break-even{" "}
+              {euro(row.break_even_revenue_minor,locale)}
+            </span>
+            <em>
+              {t("yield.contribution")} {euro(row.contribution_minor,locale)}
+              <small>{t("yield.deterministic")}</small>
+            </em>
+          </div>
+        ))}
+      </RecordPanel>
+    </div>
+  );
+}
+
+async function compliance(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  organisationId: string,
+  venues: Venue[],
+  locale: AuthLocale,
+) {
+  const t=(key:AuthMessageKey)=>authMessage(locale,key);
+  const [{ data: staffData }, { data: incidentData }] = await Promise.all([
+    supabase
+      .from("staff_profiles")
+      .select("id,full_name,role_name,onboarding_status,preferred_language")
+      .eq("organisation_id", organisationId)
+      .order("full_name"),
+    supabase
+      .from("staff_incidents")
+      .select("id,venue_id,occurred_at,category,status,factual_record")
+      .eq("organisation_id", organisationId)
+      .order("occurred_at", { ascending: false }),
+  ]);
+  const staff = (staffData ?? []) as Staff[];
+  const incidents = (incidentData ?? []) as unknown as IncidentRow[];
+  return (
+    <div className="workflow-stack">
+      <div className="legal-note">{t("compliance.notice")}</div>
+      <div className="split-workspace">
+        <WorkflowForm
+          organisationId={organisationId}
+          workflow="staff_profile"
+          title={t("compliance.limitedProfile")}
+          submitLabel={t("compliance.createProfile")}
+          fields={[
+            { name: "fullName", label: t("compliance.fullName"), required: true },
+            { name: "contactEmail", label: t("auth.email"), type: "email" },
+            { name: "roleName", label: t("compliance.role"), required: true },
+            { name: "engagementType", label: t("compliance.engagement"), required: true },
+            {
+              name: "preferredLanguage",
+              label: t("compliance.preferredLanguage"),
+              type: "select",
+              required: true,
+              options: [
+                { label: t("language.nl"), value: "nl" },
+                { label: t("language.en"), value: "en" },
+              ],
+            },
+            {
+              name: "startDate",
+              label: t("compliance.startDate"),
+              type: "date",
+              required: true,
+            },
+          ]}
+        />
+        <RecordPanel
+          title={t("compliance.onboarding")}
+          empty={t("compliance.noProfiles")}
+        >
+          {staff.map((row) => (
+            <div className="record-row" key={row.id}>
+              <b>{row.full_name}</b>
+              <span>
+                {row.role_name} · {row.preferred_language.toUpperCase()}
+              </span>
+              <em>{authEnumLabel(locale,row.onboarding_status)}</em>
+            </div>
+          ))}
+        </RecordPanel>
+      </div>
+      <div className="split-workspace">
+        <WorkflowForm
+          organisationId={organisationId}
+          workflow="incident"
+          title={t("compliance.recordIncident")}
+          submitLabel={t("compliance.saveIncident")}
+          fields={[
+            {
+              name: "venueId",
+              label: t("common.venue"),
+              type: "select",
+              required: true,
+              options: venueOptions(venues),
+            },
+            {
+              name: "occurredAt",
+              label: t("compliance.occurredAt"),
+              type: "datetime-local",
+              required: true,
+            },
+            { name: "category", label: t("products.category"), required: true },
+            {
+              name: "factualRecord",
+              label: t("compliance.factualRecord"),
+              type: "textarea",
+              required: true,
+            },
+            { name: "witnesses", label: t("compliance.witnesses"), type: "textarea" },
+            { name: "actions", label: t("compliance.actions"), type: "textarea" },
+          ]}
+        />
+        <RecordPanel
+          title={t("compliance.incidents")}
+          empty={t("compliance.noIncidents")}
+        >
+          {incidents.map((row) => (
+            <div className="record-row" key={row.id}>
+              <b>
+                {row.category} · {date(row.occurred_at,locale)}
+              </b>
+              <span>{row.factual_record}</span>
+              <em>{authEnumLabel(locale,row.status)}</em>
+            </div>
+          ))}
+        </RecordPanel>
+      </div>
+    </div>
+  );
+}
+
+function integrations(locale:AuthLocale) {
+  const t=(key:AuthMessageKey)=>authMessage(locale,key);
+  const configured = (name: string) => Boolean(process.env[name]);
+  const rows = [
+    [
+      t("integrations.supabase"),
+      configured("NEXT_PUBLIC_SUPABASE_URL") &&
+        configured("NEXT_PUBLIC_SUPABASE_ANON_KEY"),
+      t("integrations.supabaseHelp"),
+    ],
+    [
+      t("integrations.stripe"),
+      configured("STRIPE_SECRET_KEY") && configured("STRIPE_WEBHOOK_SECRET"),
+      t("integrations.stripeHelp"),
+    ],
+    [
+      t("integrations.openai"),
+      configured("OPENAI_API_KEY"),
+      t("integrations.openaiHelp"),
+    ],
+    [
+      t("integrations.email"),
+      configured("RESEND_API_KEY"),
+      t("integrations.emailHelp"),
+    ],
+    [
+      t("integrations.cron"),
+      configured("CRON_SECRET"),
+      t("integrations.cronHelp"),
+    ],
+    [t("integrations.csv"), true, t("integrations.csvHelp")],
+  ];
+  return (
+    <section className="panel">
+      <div className="record-list">
+        {rows.map(([label, ok, detail]) => (
+          <div className="record-row" key={String(label)}>
+            <b>{label}</b>
+            <span>{detail}</span>
+            <em className={ok ? "ok" : "warn"}>
+              {ok ? t("integrations.configured") : t("integrations.required")}
+            </em>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function RecordPanel({
+  title,
+  empty,
+  children,
+}: {
+  title: string;
+  empty: string;
+  children: React.ReactNode;
+}) {
+  const list = Array.isArray(children) ? children.filter(Boolean) : children;
+  const isEmpty = Array.isArray(list) && list.length === 0;
+  return (
+    <section className="panel record-panel">
+      <header>
+        <div>
+          <h3>{title}</h3>
+        </div>
+      </header>
+      {isEmpty ? (
+        <div className="empty-state">
+          <p>{empty}</p>
+        </div>
+      ) : (
+        <div className="record-list">{list}</div>
+      )}
+    </section>
+  );
+}
+function HonestEmpty({ title,locale }: { title: string;locale:AuthLocale }) {
+  const t=(key:AuthMessageKey)=>authMessage(locale,key);
+  return (
+    <section className="panel">
+      <div className="empty-state">
+        <h2>{title}</h2>
+        <p>{t("empty.unavailable")}</p>
+      </div>
+    </section>
+  );
+}

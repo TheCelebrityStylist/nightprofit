@@ -3,9 +3,11 @@ import {z} from "zod";
 import {requireMembership} from "../../../lib/auth/require-membership";
 import {decimalToMinor} from "../../../lib/imports/locale-number";
 import {requiredStaff} from "../../../lib/operations/planning";
+import {assertSameOrigin,securityErrorResponse} from "../../../lib/http/security";
 
 const envelope=z.object({
   organisationId:z.string().uuid(),
+  locale:z.enum(["nl-NL","en-US"]).default("nl-NL"),
   action:z.enum(["department","role","forecast","shift","publish","availability","proposal","resolve_action"]),
   values:z.record(z.string(),z.string()),
 });
@@ -21,6 +23,7 @@ const iso=(value:string)=>new Date(value).toISOString();
 
 export async function POST(request:Request){
   try{
+    assertSameOrigin(request);
     const input=envelope.parse(await request.json());
     if(input.action==="department"){
       const values=departmentSchema.parse(input.values);
@@ -32,7 +35,7 @@ export async function POST(request:Request){
     if(input.action==="role"){
       const values=roleSchema.parse(input.values);
       const {supabase}=await requireMembership(input.organisationId,"planning.manage");
-      const {error}=await supabase.from("operational_roles").insert({organisation_id:input.organisationId,department_id:values.departmentId,name:values.name,hourly_cost_minor:decimalToMinor(values.hourlyCost,"nl-NL").toString(),minimum_staff:values.minimumStaff,guests_per_staff:values.guestsPerStaff});
+      const {error}=await supabase.from("operational_roles").insert({organisation_id:input.organisationId,department_id:values.departmentId,name:values.name,hourly_cost_minor:decimalToMinor(values.hourlyCost,input.locale).toString(),minimum_staff:values.minimumStaff,guests_per_staff:values.guestsPerStaff});
       if(error)throw error;
       return NextResponse.json({message:"Operationele rol toegevoegd."},{status:201});
     }
@@ -41,7 +44,7 @@ export async function POST(request:Request){
       const {supabase}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
       const startsAt=iso(values.startsAt),endsAt=iso(values.endsAt);
       if(new Date(endsAt)<=new Date(startsAt))throw new Error("INVALID_WINDOW");
-      const interval=[{starts_at:startsAt,ends_at:endsAt,expected_guests:values.expectedGuests,expected_revenue_minor:decimalToMinor(values.expectedRevenue,"nl-NL").toString(),required_staff:requiredStaff(values.expectedGuests,values.minimumStaff,values.guestsPerStaff)}];
+      const interval=[{starts_at:startsAt,ends_at:endsAt,expected_guests:values.expectedGuests,expected_revenue_minor:decimalToMinor(values.expectedRevenue,input.locale).toString(),required_staff:requiredStaff(values.expectedGuests,values.minimumStaff,values.guestsPerStaff)}];
       const {error}=await supabase.rpc("create_demand_plan",{target_organisation_id:input.organisationId,target_venue_id:values.venueId,target_trading_date:values.tradingDate,interval_inputs:interval,target_assumptions:{manager_note:values.managerNote,minimum_staff:values.minimumStaff,guests_per_staff:values.guestsPerStaff}});
       if(error)throw error;
       return NextResponse.json({message:"Intervalforecast met personeelsbehoefte opgeslagen."},{status:201});
@@ -53,9 +56,9 @@ export async function POST(request:Request){
       if(new Date(endsAt)<=new Date(startsAt))throw new Error("INVALID_WINDOW");
       if(values.staffId!=="open"){
         const {data:overlaps}=await supabase.from("shifts").select("id").eq("organisation_id",input.organisationId).eq("staff_id",values.staffId).lt("starts_at",endsAt).gt("ends_at",startsAt).not("status","in","(cancelled,rejected)").limit(1);
-        if(overlaps?.length)return NextResponse.json({error:"Deze medewerker heeft een overlappende dienst."},{status:409});
+        if(overlaps?.length)return NextResponse.json({errorCode:"SHIFT_OVERLAP"},{status:409});
       }
-      const {error}=await supabase.from("shifts").insert({organisation_id:input.organisationId,venue_id:values.venueId,department_id:values.departmentId,role_id:values.roleId,staff_id:values.staffId==="open"?null:values.staffId,starts_at:startsAt,ends_at:endsAt,break_minutes:values.breakMinutes,hourly_cost_minor:decimalToMinor(values.hourlyCost,"nl-NL").toString(),status:"draft",source:"manager",created_by:user.id});
+      const {error}=await supabase.from("shifts").insert({organisation_id:input.organisationId,venue_id:values.venueId,department_id:values.departmentId,role_id:values.roleId,staff_id:values.staffId==="open"?null:values.staffId,starts_at:startsAt,ends_at:endsAt,break_minutes:values.breakMinutes,hourly_cost_minor:decimalToMinor(values.hourlyCost,input.locale).toString(),status:"draft",source:"manager",created_by:user.id});
       if(error)throw error;
       return NextResponse.json({message:"Conceptdienst toegevoegd; publicatie vereist."},{status:201});
     }
@@ -99,7 +102,6 @@ export async function POST(request:Request){
     if(error)throw error;
     return NextResponse.json({message:"Actie opgelost en verantwoord."});
   }catch(error){
-    const message=error instanceof z.ZodError?"Controleer alle verplichte velden en bedragen.":"De bewerking kon niet veilig worden uitgevoerd.";
-    return NextResponse.json({error:message},{status:400});
+    return securityErrorResponse(error)??NextResponse.json({errorCode:error instanceof z.ZodError?"VALIDATION_FAILED":"PLANNING_ACTION_FAILED"},{status:400});
   }
 }

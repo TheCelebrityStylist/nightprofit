@@ -26,8 +26,12 @@ describe("authenticated NL/EN translation parity", () => {
       "app/pos-import-workspace.tsx",
       "app/pos-mapping-workspace.tsx",
       "app/reconciliation-workspace.tsx",
+      "app/authenticated-app.tsx",
+      "app/availability-manager.tsx",
+      "app/onboarding/onboarding-form.tsx",
+      "app/workflow-form.tsx",
     ];
-    const operatorCopy = /\b(Vestiging|Afsluiting|Controle|Telling|Bevestig|Geen|Verwacht|Werkelijk|Toelichting|Wachtwoord|E-mailadres|Opslaan|Producten)\b/;
+    const operatorCopy = /\b(Vestiging|Afsluiting|Controle|Telling|Bevestig|Geen|Verwacht|Werkelijk|Toelichting|Wachtwoord|E-mailadres|Opslaan|Producten|Leverancier|Medewerker|Rooster|Beschikbaarheid|Uren|Incident|Beleid)\b/;
     for (const file of files) {
       expect(readFileSync(resolve(file), "utf8"), file).not.toMatch(operatorCopy);
     }

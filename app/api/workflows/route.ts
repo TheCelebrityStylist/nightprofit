@@ -3,10 +3,12 @@ import { z } from "zod";
 import { requireMembership } from "../../../lib/auth/require-membership";
 import { decimalToMinor } from "../../../lib/imports/locale-number";
 import { add, breakEvenRevenue, eventContribution, marginBasisPoints, money } from "../../../lib/calculations";
+import { assertSameOrigin, securityErrorResponse } from "../../../lib/http/security";
 
 const envelope = z.object({
   workflow: z.enum(["booking_inquiry", "supplier", "product", "menu_item", "event_yield", "staff_profile", "incident"]),
   organisationId: z.string().uuid(),
+  locale: z.enum(["nl-NL", "en-US"]).default("nl-NL"),
   values: z.record(z.string(), z.string()),
 });
 
@@ -52,15 +54,17 @@ const incidentSchema = z.object({
 });
 
 function iso(value:string) { return new Date(value).toISOString(); }
-function minor(value:string) { return decimalToMinor(value || "0", "nl-NL"); }
+function minor(value:string, locale:"nl-NL"|"en-US") { return decimalToMinor(value || "0", locale); }
 
 export async function POST(request: Request) {
   try {
+    assertSameOrigin(request);
     const input = envelope.parse(await request.json());
+    const minorValue = (value:string) => minor(value, input.locale);
     if (input.workflow === "booking_inquiry") {
       const values = bookingSchema.parse(input.values);
       const { supabase, user } = await requireMembership(input.organisationId, "bookings.manage", values.venueId);
-      const budgetMinor = values.budget ? minor(values.budget).toString() : null;
+      const budgetMinor = values.budget ? minorValue(values.budget).toString() : null;
       const { error } = await supabase.from("booking_inquiries").insert({
         organisation_id: input.organisationId, venue_id: values.venueId, status: "new",
         source: values.source, preferred_start: iso(values.preferredStart), group_size: values.groupSize,
@@ -89,8 +93,8 @@ export async function POST(request: Request) {
         target_barcode:values.barcode,target_package_quantity:values.packageQuantity,
         target_unit_volume_ml:values.unitVolumeMl===""?null:values.unitVolumeMl,
         target_purchase_unit:values.purchaseUnit,target_serving_unit:values.servingUnit,
-        target_net_cost_minor:minor(values.netCost).toString(),target_vat_basis_points:values.vatBasisPoints,
-        target_deposit_minor:minor(values.deposit).toString(),
+        target_net_cost_minor:minorValue(values.netCost).toString(),target_vat_basis_points:values.vatBasisPoints,
+        target_deposit_minor:minorValue(values.deposit).toString(),
       });
       if(error)throw error;
       return NextResponse.json({message:"Product en actuele inkoopprijs atomair opgeslagen."},{status:201});
@@ -102,7 +106,7 @@ export async function POST(request: Request) {
         target_organisation_id:input.organisationId,target_venue_id:values.venueId,target_name:values.name,
         target_category:values.category,target_product_id:values.productId,target_quantity:values.quantity,
         target_unit:values.unit,target_waste_basis_points:values.wasteBasisPoints,
-        target_gross_price_minor:minor(values.grossPrice).toString(),target_vat_basis_points:values.vatBasisPoints,
+        target_gross_price_minor:minorValue(values.grossPrice).toString(),target_vat_basis_points:values.vatBasisPoints,
         target_margin_basis_points:values.targetMarginBasisPoints,
       });
       if(error)throw error;
@@ -111,11 +115,11 @@ export async function POST(request: Request) {
     if (input.workflow === "event_yield") {
       const values = eventSchema.parse(input.values);
       const { supabase, user } = await requireMembership(input.organisationId, "events.manage", values.venueId);
-      const revenue = add(minor(values.ticketRevenue), minor(values.barRevenue));
-      const staff = minor(values.staffing);
-      const directCosts = [staff, minor(values.security), minor(values.entertainment), minor(values.stock), minor(values.otherCosts)];
+      const revenue = add(minorValue(values.ticketRevenue), minorValue(values.barRevenue));
+      const staff = minorValue(values.staffing);
+      const directCosts = [staff, minorValue(values.security), minorValue(values.entertainment), minorValue(values.stock), minorValue(values.otherCosts)];
       const contribution = eventContribution(revenue, ...directCosts);
-      const variableCost = minor(values.stock);
+      const variableCost = minorValue(values.stock);
       const variableRate = revenue === 0n ? 0n : (variableCost * 10000n) / revenue;
       const contributionMargin = 10000n - variableRate;
       const fixedCosts = add(...directCosts.filter((_, index)=>index !== 3));
@@ -128,15 +132,15 @@ export async function POST(request: Request) {
       }).select("id").single();
       if (eventError || !event) throw eventError ?? new Error("event_failed");
       const inputs = {
-        attendance: values.attendance, ticket_revenue_minor: minor(values.ticketRevenue).toString(),
-        bar_revenue_minor: minor(values.barRevenue).toString(), costs_minor: directCosts.map(String),
+        attendance: values.attendance, ticket_revenue_minor: minorValue(values.ticketRevenue).toString(),
+        bar_revenue_minor: minorValue(values.barRevenue).toString(), costs_minor: directCosts.map(String),
       };
       const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(inputs)));
       const contentHash = Array.from(new Uint8Array(digest), byte=>byte.toString(16).padStart(2,"0")).join("");
       const { error } = await supabase.from("event_yield_scenarios").insert({
         organisation_id: input.organisationId, venue_id: values.venueId, event_id: event.id, scenario: "base",
         model_version: "deterministic-planning", calculation_version: "1", formula_version: "1",
-        input_snapshot: inputs, configuration_snapshot: { locale: "nl-NL" },
+        input_snapshot: inputs, configuration_snapshot: { locale: input.locale },
         assumptions: { planning_mode: "deterministic", comparable_minimum: 3 },
         attendance_low: values.attendance, attendance_high: values.attendance,
         revenue_low_minor: revenue.toString(), revenue_high_minor: revenue.toString(),
@@ -171,7 +175,6 @@ export async function POST(request: Request) {
     if (error) throw error;
     return NextResponse.json({ message: "Conceptincident veilig opgeslagen." }, { status: 201 });
   } catch (error) {
-    const message = error instanceof z.ZodError ? "Controleer de verplichte velden en bedragen." : "Deze bewerking kon niet veilig worden opgeslagen.";
-    return NextResponse.json({ error: message }, { status: 400 });
+    return securityErrorResponse(error) ?? NextResponse.json({ errorCode: error instanceof z.ZodError ? "VALIDATION_FAILED" : "WORKFLOW_ACTION_FAILED" }, { status: 400 });
   }
 }

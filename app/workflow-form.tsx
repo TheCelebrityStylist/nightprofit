@@ -2,11 +2,19 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useAuthLocale } from "./auth-locale";
 
 type Field = {
   name: string;
   label: string;
-  type?: "text" | "email" | "number" | "date" | "datetime-local" | "select" | "textarea";
+  type?:
+    | "text"
+    | "email"
+    | "number"
+    | "date"
+    | "datetime-local"
+    | "select"
+    | "textarea";
   required?: boolean;
   options?: { label: string; value: string }[];
   placeholder?: string;
@@ -27,6 +35,7 @@ export function WorkflowForm({
   fields: Field[];
   endpoint?: string;
 }) {
+  const { t, locale } = useAuthLocale();
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
@@ -40,15 +49,22 @@ export function WorkflowForm({
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(["/api/planning","/api/workforce"].includes(endpoint) ? { action: workflow, organisationId, values } : { workflow, organisationId, values }),
+      body: JSON.stringify(
+        ["/api/planning", "/api/workforce"].includes(endpoint)
+          ? { action: workflow, organisationId, locale: locale === "nl" ? "nl-NL" : "en-US", values }
+          : { workflow, organisationId, locale: locale === "nl" ? "nl-NL" : "en-US", values },
+      ),
     });
-    const result = (await response.json()) as { error?: string; message?: string };
+    await response.json() as {
+      error?: string;
+      message?: string;
+    };
     setPending(false);
     if (!response.ok) {
-      setError(result.error ?? "Opslaan is niet gelukt.");
+      setError(t("common.saveFailed"));
       return;
     }
-    setSuccess(result.message ?? "Opgeslagen.");
+    setSuccess(t("common.saved"));
     router.refresh();
   }
 
@@ -60,21 +76,52 @@ export function WorkflowForm({
           <label key={field.name}>
             {field.label}
             {field.type === "select" ? (
-              <select name={field.name} required={field.required} defaultValue="">
-                <option value="" disabled>Kies…</option>
-                {field.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              <select
+                name={field.name}
+                required={field.required}
+                defaultValue=""
+              >
+                <option value="" disabled>
+                  {t("common.choose")}
+                </option>
+                {field.options?.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
               </select>
             ) : field.type === "textarea" ? (
-              <textarea name={field.name} required={field.required} placeholder={field.placeholder} rows={3} />
+              <textarea
+                name={field.name}
+                required={field.required}
+                placeholder={field.placeholder}
+                rows={3}
+              />
             ) : (
-              <input name={field.name} type={field.type ?? "text"} step={field.type==="number"?"any":undefined} required={field.required} placeholder={field.placeholder} />
+              <input
+                name={field.name}
+                type={field.type ?? "text"}
+                step={field.type === "number" ? "any" : undefined}
+                required={field.required}
+                placeholder={field.placeholder}
+              />
             )}
           </label>
         ))}
       </div>
-      {error && <p className="form-error" role="alert">{error}</p>}
-      {success && <p className="form-success" role="status">{success}</p>}
-      <button className="primary" disabled={pending}>{pending ? "Opslaan…" : submitLabel}</button>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      {success && (
+        <p className="form-success" role="status">
+          {success}
+        </p>
+      )}
+      <button className="primary" disabled={pending} aria-busy={pending}>
+        {pending ? t("common.saving") : submitLabel}
+      </button>
     </form>
   );
 }

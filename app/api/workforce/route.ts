@@ -1,11 +1,13 @@
 import {NextResponse} from "next/server";
 import {z} from "zod";
 import {requireMembership} from "../../../lib/auth/require-membership";
+import {assertSameOrigin,securityErrorResponse} from "../../../lib/http/security";
 
 const inputSchema=z.object({organisationId:z.string().uuid(),action:z.enum(["respond","clock_in","clock_out","approve_time"]),values:z.record(z.string(),z.string())});
 
 export async function POST(request:Request){
   try{
+    assertSameOrigin(request);
     const input=inputSchema.parse(await request.json());
     if(input.action==="respond"){
       const values=z.object({venueId:z.string().uuid(),shiftId:z.string().uuid(),staffId:z.string().uuid(),response:z.enum(["accepted","rejected"]),reason:z.string().trim().max(500).default("")}).parse(input.values);
@@ -36,6 +38,6 @@ export async function POST(request:Request){
     if(error)throw error;
     return NextResponse.json({message:"Uren goedgekeurd en geaudit."});
   }catch(error){
-    return NextResponse.json({error:error instanceof z.ZodError?"Controleer de invoer.":"Deze personeelsactie kon niet veilig worden uitgevoerd."},{status:400});
+    return securityErrorResponse(error)??NextResponse.json({errorCode:error instanceof z.ZodError?"VALIDATION_FAILED":"WORKFORCE_ACTION_FAILED"},{status:400});
   }
 }

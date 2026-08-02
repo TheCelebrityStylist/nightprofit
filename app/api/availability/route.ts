@@ -2,6 +2,7 @@ import {NextResponse} from "next/server";
 import {z} from "zod";
 import {requireMembership} from "../../../lib/auth/require-membership";
 import {createAvailabilityToken,hashAvailabilityToken} from "../../../lib/workforce/availability";
+import {assertSameOrigin,securityErrorResponse} from "../../../lib/http/security";
 
 const schema=z.object({
   organisationId:z.string().uuid(),venueId:z.string().uuid(),
@@ -11,6 +12,7 @@ const schema=z.object({
 
 export async function POST(request:Request){
   try{
+    assertSameOrigin(request);
     const input=schema.parse(await request.json());
     const {supabase}=await requireMembership(input.organisationId,"workforce.manage",input.venueId);
     const origin=new URL(request.url).origin;
@@ -31,6 +33,6 @@ export async function POST(request:Request){
     if(error)throw error;
     return NextResponse.json({message:`Beschikbaarheid gevraagd aan ${recipients.length} medewerker(s).`,requestId:data,links:Object.fromEntries(links)},{status:201});
   }catch(error){
-    return NextResponse.json({error:error instanceof z.ZodError?"Controleer periode, deadline en ontvangers.":"De beschikbaarheidsaanvraag kon niet veilig worden gemaakt."},{status:400});
+    return securityErrorResponse(error)??NextResponse.json({errorCode:error instanceof z.ZodError?"VALIDATION_FAILED":"AVAILABILITY_REQUEST_FAILED"},{status:400});
   }
 }
