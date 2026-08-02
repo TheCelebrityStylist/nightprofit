@@ -4,7 +4,7 @@ export interface Database {
   public: {
     Tables: {
       organisations: { Row: { id:string; name:string; locale:string; currency:string; timezone:string; onboarding_step:number; onboarding_completed_at:string|null; ai_enabled:boolean; stripe_customer_id:string|null }; Insert: { name:string; created_by:string; locale?:string; currency?:string; timezone?:string }; Update: Record<string,unknown>; Relationships: [] };
-      organisation_members: { Row: { organisation_id:string; user_id:string; role:MemberRole; venue_ids:string[]|null; approved_closes:boolean }; Insert: { organisation_id:string; user_id:string; role:MemberRole }; Update: Record<string,unknown>; Relationships: [] };
+      organisation_members: { Row: { organisation_id:string; user_id:string; role:MemberRole; venue_ids:string[]|null; approved_closes:boolean; active:boolean; disabled_at:string|null }; Insert: { organisation_id:string; user_id:string; role:MemberRole; active?:boolean; disabled_at?:string|null }; Update: Record<string,unknown>; Relationships: [] };
       venues: { Row: { id:string; organisation_id:string; name:string; venue_type:string; timezone:string; trading_cutoff:string }; Insert: { organisation_id:string; name:string; venue_type:string; timezone?:string }; Update: Record<string,unknown>; Relationships: [] };
       closing_sessions: { Row: { id:string; organisation_id:string; venue_id:string; trading_date:string; status:string; version:number; expected_total_minor:string; accounted_total_minor:string; difference_minor:string; reopened_reason:string|null }; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
       closing_lines: { Row: { id:string; organisation_id:string; closing_session_id:string; line_type:string; expected_minor:string; actual_minor:string; quantity:string|null; metadata:Json }; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
@@ -56,9 +56,33 @@ export interface Database {
       whatsapp_templates: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
       notification_outbox: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
       webhook_events: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      connector_registry: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      source_mappings: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      mapping_exceptions: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      automation_rules: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      automation_runs: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      approval_requests: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      pos_imports: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      pos_rejected_rows: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      normalized_sales: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      stock_locations: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      stock_counts: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      stock_count_lines: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      stock_movements: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: never; Relationships: [] };
+      bottle_scan_images: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      bottle_detections: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      beverage_reconciliations: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      reconciliation_exceptions: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      reconciliation_runs: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      reconciliation_readiness_checks: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      reconciliation_product_results: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: never; Relationships: [] };
+      reconciliation_summaries: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: never; Relationships: [] };
+      reconciliation_exception_decisions: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: never; Relationships: [] };
     };
     Views: Record<string,never>;
     Functions: {
+      create_close_draft: { Args: { target_organisation_id:string; target_venue_id:string; target_trading_date:string }; Returns:Database["public"]["Tables"]["closing_sessions"]["Row"] };
+      add_close_line: { Args: { target_organisation_id:string; target_close_id:string; target_line_type:string; target_expected_minor:string; target_actual_minor:string; target_metadata:Record<string,unknown>; target_idempotency_key:string }; Returns:{ id:string; organisation_id:string; closing_session_id:string } };
       create_organisation: { Args: { org_name:string; venue_name:string }; Returns:string };
       has_capability: { Args: { target_organisation_id:string; target_venue_id:string|null; required_capability:string }; Returns:boolean };
       transition_close: { Args: { target_close_id:string; target_status:string; reason?:string|null }; Returns:Database["public"]["Tables"]["closing_sessions"]["Row"] };
@@ -72,6 +96,14 @@ export interface Database {
       submit_availability_request: { Args: { target_token_hash:string;entry_inputs:Json }; Returns:Json };
       create_product_with_cost: { Args: { target_organisation_id:string;target_supplier_id:string|null;target_name:string;target_brand:string;target_category:string;target_sku:string;target_barcode:string;target_package_quantity:number;target_unit_volume_ml:number|null;target_purchase_unit:string;target_serving_unit:string;target_net_cost_minor:string;target_vat_basis_points:number;target_deposit_minor:string }; Returns:Record<string,unknown> };
       create_menu_item_with_component: { Args: { target_organisation_id:string;target_venue_id:string;target_name:string;target_category:string;target_product_id:string;target_quantity:number;target_unit:string;target_waste_basis_points:number;target_gross_price_minor:string;target_vat_basis_points:number;target_margin_basis_points:number }; Returns:Record<string,unknown> };
+      confirm_pos_mapping: { Args: { target_organisation_id:string;target_venue_id:string;target_source_value:string;target_menu_item_id:string;target_confidence_basis_points:number;target_reasoning:Json;target_effective_from:string }; Returns:Record<string,unknown> };
+      create_stock_count: { Args: { target_organisation_id:string;target_venue_id:string;target_location_id:string;target_trading_date:string;target_count_type:string;target_counted_at:string;target_notes:string;target_idempotency_key:string;line_inputs:Json }; Returns:string };
+      submit_stock_count: { Args: { target_organisation_id:string;target_count_id:string }; Returns:Record<string,unknown> };
+      post_stock_count: { Args: { target_organisation_id:string;target_count_id:string;target_idempotency_key:string }; Returns:Record<string,unknown> };
+      record_stock_movement: { Args: { target_organisation_id:string;target_venue_id:string;target_location_id:string;target_product_id:string;target_trading_date:string;target_movement_type:string;target_quantity:string;target_source_type:string;target_source_id:string;target_idempotency_key:string;target_evidence:Json;target_correction_of_id?:string|null }; Returns:Record<string,unknown> };
+      begin_reconciliation: { Args: { target_organisation_id:string;target_venue_id:string;target_trading_date:string;target_policy_version?:string;target_materiality_threshold_minor?:string }; Returns:Record<string,unknown> };
+      decide_reconciliation_exception: { Args: { target_organisation_id:string;target_exception_id:string;target_action:string;target_reason:string;target_idempotency_key:string;target_evidence?:Json }; Returns:Record<string,unknown> };
+      prepare_reconciliation_close: { Args: { target_organisation_id:string;target_venue_id:string;target_trading_date:string;target_reconciliation_id:string }; Returns:Record<string,unknown> };
     };
     Enums: { member_role: MemberRole };
     CompositeTypes: Record<string,never>;

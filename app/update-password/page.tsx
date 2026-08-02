@@ -1,2 +1,7 @@
+import { cookies } from "next/headers";
 import { AuthForm } from "../auth-form";
-export default function UpdatePasswordPage(){return <AuthForm mode="update"/>}
+import { normalizeAuthLocale } from "../../lib/i18n/authenticated";
+
+export default async function UpdatePasswordPage() {
+  return <AuthForm mode="update" locale={normalizeAuthLocale((await cookies()).get("nightprofit_locale")?.value)}/>;
+}

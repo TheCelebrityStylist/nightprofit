@@ -29,8 +29,8 @@ test("server-renders the synthetic demo route", async () => {
   const response = await render("/demo");
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /SYNTHETISCHE DEMO/);
-  assert.match(html, /DAGELIJKSE OWNER BRIEFING/);
-  assert.match(html, /Onverklaard verschil/);
-  assert.match(html, /Alle getoonde data is fictief/);
+  assert.match(html, /Interactieve demo/);
+  assert.match(html, /Volgende beste actie/);
+  assert.match(html, /Operationele tijdlijn/);
+  assert.match(html, /Alle data is synthetisch/);
 });

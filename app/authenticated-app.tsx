@@ -1,21 +1,28 @@
 import Link from "next/link";
+import { cookies } from "next/headers";
 import { createSupabaseServerClient } from "../lib/supabase/server";
+import { authIntlLocale, authMessage, normalizeAuthLocale, type AuthLocale, type AuthMessageKey } from "../lib/i18n/authenticated";
+import { AuthLocaleProvider, AuthLocaleSwitch } from "./auth-locale";
 import { AuthForm } from "./auth-form";
 import { CloseForm } from "./close-form";
 import { CloseWorkspace } from "./close-workspace";
 import { OnboardingForm } from "./onboarding/onboarding-form";
 import { WorkflowForm } from "./workflow-form";
 import { AvailabilityManager } from "./availability-manager";
+import { PosImportWorkspace } from "./pos-import-workspace";
+import { PosMappingWorkspace } from "./pos-mapping-workspace";
+import { InventoryCountWorkspace } from "./inventory-count-workspace";
+import { ReconciliationWorkspace } from "./reconciliation-workspace";
 import "./real-app.css";
 
 const navigation = [
-  ["Vandaag", "/app/dashboard"], ["Sales & Demand", "/app/bookings"],
-  ["Plan & Rooster", "/app/planning"], ["Producten & Recepten", "/app/products"], ["Inkoop & Marge", "/app/suppliers"],
-  ["Mijn werk", "/app/my-work"],
-  ["Close & Learn", "/app/close"],
-  ["Event Yield", "/app/yield"], ["Team & Compliance", "/app/compliance"],
-  ["Alerts & Actions", "/app/alerts"], ["Reports", "/app/reports"],
-  ["Integrations", "/app/integrations"], ["Settings", "/app/settings"], ["Billing", "/app/billing"],
+  ["nav.today", "/app/dashboard"], ["nav.sales", "/app/bookings"],
+  ["nav.planning", "/app/planning"], ["nav.inventory", "/app/inventory"], ["nav.products", "/app/products"], ["nav.suppliers", "/app/suppliers"],
+  ["nav.myWork", "/app/my-work"], ["nav.posImport", "/app/imports/pos"], ["nav.posMapping", "/app/mappings/pos"], ["nav.reconcile", "/app/reconcile"],
+  ["nav.close", "/app/close"],
+  ["nav.yield", "/app/yield"], ["nav.compliance", "/app/compliance"],
+  ["nav.alerts", "/app/alerts"], ["nav.reports", "/app/reports"],
+  ["nav.integrations", "/app/integrations"], ["nav.settings", "/app/settings"], ["nav.billing", "/app/billing"],
 ] as const;
 
 type Venue = {id:string;name:string;timezone:string};
@@ -27,18 +34,24 @@ type Scenario = {id:string;venue_id:string;event_id:string;scenario:string;reven
 type EventRow = {id:string;name:string;starts_at:string};
 type Incident = {id:string;venue_id:string;occurred_at:string;category:string;status:string;factual_record:string};
 
-const euro = (minor:string|number|bigint|null|undefined) => new Intl.NumberFormat("nl-NL",{style:"currency",currency:"EUR"}).format(Number(BigInt(minor??0))/100);
-const date = (value:string) => new Intl.DateTimeFormat("nl-NL",{dateStyle:"medium"}).format(new Date(value));
+const euro = (minor:string|number|bigint|null|undefined, locale:AuthLocale="nl") => new Intl.NumberFormat(authIntlLocale(locale),{style:"currency",currency:"EUR"}).format(Number(BigInt(minor??0))/100);
+const date = (value:string, locale:AuthLocale="nl") => new Intl.DateTimeFormat(authIntlLocale(locale),{dateStyle:"medium"}).format(new Date(value));
 const venueOptions = (venues:Venue[]) => venues.map((venue)=>({label:venue.name,value:venue.id}));
 
 export async function AuthenticatedApp({ path }: { path: string }) {
+  const locale=normalizeAuthLocale((await cookies()).get("nightprofit_locale")?.value);
+  return <AuthLocaleProvider initialLocale={locale}><AuthenticatedAppContent path={path} locale={locale}/></AuthLocaleProvider>;
+}
+
+async function AuthenticatedAppContent({ path, locale }: { path: string; locale:AuthLocale }) {
+  const t=(key:AuthMessageKey)=>authMessage(locale,key);
   const supabase = await createSupabaseServerClient().catch(()=>null);
-  if(!supabase)return <AuthForm mode="login"/>;
+  if(!supabase)return <AuthForm mode="login" locale={locale}/>;
   const authResult = await supabase.auth.getUser().catch(()=>null);
-  if(!authResult)return <AuthForm mode="login"/>;
+  if(!authResult)return <AuthForm mode="login" locale={locale}/>;
   const { data: { user }, error: authError } = authResult;
-  if (authError || !user) return <AuthForm mode="login"/>;
-  const { data: memberships, error: membershipError } = await supabase.from("organisation_members").select("organisation_id,role").eq("user_id", user.id);
+  if (authError || !user) return <AuthForm mode="login" locale={locale}/>;
+  const { data: memberships, error: membershipError } = await supabase.from("organisation_members").select("organisation_id,role").eq("user_id", user.id).eq("active",true);
   if (membershipError) throw new Error("Membership lookup failed");
   if (!memberships?.length) return <OnboardingForm/>;
   const membership = memberships[0];
@@ -51,9 +64,10 @@ export async function AuthenticatedApp({ path }: { path: string }) {
   if (!organisation) return <OnboardingForm/>;
   const venues = (venuesData ?? []) as Venue[];
   const closes = (closesData ?? []) as Close[];
-  const activeLabel = navigation.find(([, href]) => path===href)?.[0] ?? (
-    path.startsWith("/app/close/") ? "Nightly Close" : "Command Center"
+  const activeKey = navigation.find(([, href]) => path===href)?.[0] ?? (
+    path.startsWith("/app/close/") ? "nav.nightlyClose" : "nav.command"
   );
+  const activeLabel=t(activeKey);
 
   let content: React.ReactNode;
   if (path === "/app/dashboard") content = await dashboard(supabase, organisationId, venues, closes);
@@ -65,6 +79,10 @@ export async function AuthenticatedApp({ path }: { path: string }) {
   else if (path === "/app/my-work") content = await myWork(supabase, organisationId, venues, user.id);
   else if (path === "/app/suppliers") content = await suppliers(supabase, organisationId);
   else if (path === "/app/products") content = await productsAndRecipes(supabase, organisationId, venues);
+  else if (path === "/app/imports/pos") content = <PosImportWorkspace organisationId={organisationId} venues={venues}/>;
+  else if (path === "/app/mappings/pos") content = await posMappings(supabase,organisationId,venues);
+  else if (path === "/app/inventory") content = await inventoryCounts(supabase,organisationId,venues);
+  else if (path === "/app/reconcile") content = await reconciliationWorkspace(supabase,organisationId,venues);
   else if (path === "/app/yield") content = await eventYield(supabase, organisationId, venues);
   else if (path === "/app/compliance") content = await compliance(supabase, organisationId, venues);
   else if (path === "/app/integrations") content = integrations();
@@ -73,18 +91,71 @@ export async function AuthenticatedApp({ path }: { path: string }) {
   return <div className="app-shell real-app">
     <aside>
       <Link href="/" className="brand"><span className="logo">N</span><b>NightProfit</b></Link>
-      <div className="venue" aria-label="Current organisation"><span>{organisation.name.slice(0,2).toUpperCase()}</span><div><b>{organisation.name}</b><small>{venues.length} vestiging(en) · {organisation.currency}</small></div></div>
-      <nav>{navigation.map(([label,href])=><Link key={href} href={href} className={path===href?"active":""}>{label}</Link>)}</nav>
-      <div className="aside-foot"><span>Beveiligde tenantdata</span><p>{membership.role}</p></div>
+      <div className="venue" aria-label={t("shell.currentOrganisation")}><span>{organisation.name.slice(0,2).toUpperCase()}</span><div><b>{organisation.name}</b><small>{venues.length} {t("shell.venues")} · {organisation.currency}</small></div></div>
+      <nav aria-label="NightProfit">{navigation.map(([key,href])=><Link key={href} href={href} className={path===href?"active":""}>{t(key)}</Link>)}</nav>
+      <div className="aside-foot"><span>{t("shell.secureData")}</span><p>{membership.role}</p></div>
     </aside>
     <main className="app-main">
-      <header className="topbar"><div><b>{organisation.name}</b><small>{venues.map((venue)=>venue.name).join(" · ")||"Nog geen vestiging"}</small></div><form action="/api/auth/logout" method="post"><button className="ghost">Uitloggen</button></form></header>
+      <header className="topbar"><div><b>{organisation.name}</b><small>{venues.map((venue)=>venue.name).join(" · ")||t("shell.noVenue")}</small></div><div className="topbar-actions"><AuthLocaleSwitch/><form action="/api/auth/logout" method="post"><button className="ghost">{t("shell.logout")}</button></form></div></header>
       <div className="content">
-        <section className="hero-row"><div><div className="eyebrow">LIVE · SUPABASE</div><h1>{activeLabel}</h1><p>Alle gegevens zijn beperkt tot je organisatie, rol en toegewezen vestigingen.</p></div>{path==="/app/close"&&<Link className="primary" href="/app/close/new">Nieuwe afsluiting</Link>}</section>
+        <section className="hero-row"><div><div className="eyebrow">{t("shell.live")}</div><h1>{activeLabel}</h1><p>{t("shell.scope")}</p></div>{path==="/app/close"&&<Link className="primary" href="/app/close/new">{t("shell.newClose")}</Link>}</section>
         {content}
       </div>
     </main>
   </div>;
+}
+
+async function posMappings(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>,organisationId:string,venues:Venue[]){
+  if(!venues.length)return <HonestEmpty title="POS Mapping"/>;
+  const [{data:salesData},{data:itemData},{data:mappingData}]=await Promise.all([
+    supabase.from("normalized_sales").select("venue_id,pos_product_name,pos_category,quantity,gross_minor").eq("organisation_id",organisationId),
+    supabase.from("menu_items").select("id,venue_id,name").eq("organisation_id",organisationId).order("name"),
+    supabase.from("source_mappings").select("venue_id,source_value,target_id,status").eq("organisation_id",organisationId).eq("connector_key","pos_csv").eq("source_type","product").eq("status","confirmed"),
+  ]);
+  const sales=(salesData??[]) as unknown as {venue_id:string;pos_product_name:string;pos_category:string|null;quantity:string;gross_minor:string}[];
+  const menuItems=(itemData??[]) as unknown as {id:string;venue_id:string|null;name:string}[];
+  const mappings=(mappingData??[]) as unknown as {venue_id:string;source_value:string;target_id:string}[];
+  const normalize=(value:string)=>value.toLocaleLowerCase("nl-NL").replace(/[^a-z0-9]+/g," ").trim();
+  const workspaces=venues.map(venue=>{
+    const venueItems=menuItems.filter(item=>item.venue_id===venue.id);
+    const venueMappings=mappings.filter(mapping=>mapping.venue_id===venue.id);
+    const grouped=new Map<string,{category:string|null;quantity:number;revenue:bigint}>();
+    sales.filter(row=>row.venue_id===venue.id).forEach(row=>{const current=grouped.get(row.pos_product_name)??{category:row.pos_category,quantity:0,revenue:0n};current.quantity+=Number(row.quantity);current.revenue+=BigInt(row.gross_minor);grouped.set(row.pos_product_name,current);});
+    const rows=[...grouped.entries()].map(([sourceValue,totals])=>{const suggestion=venueItems.find(item=>normalize(item.name)===normalize(sourceValue))??null;return {sourceValue,category:totals.category,quantity:String(totals.quantity),revenueMinor:totals.revenue.toString(),existingTargetId:venueMappings.find(mapping=>mapping.source_value===sourceValue)?.target_id??null,suggestedTargetId:suggestion?.id??null,confidenceBasisPoints:suggestion?10000:0,reasonCode:suggestion?"exact" as const:"manual" as const};}).sort((left,right)=>BigInt(right.revenueMinor)>BigInt(left.revenueMinor)?1:-1);
+    return {id:venue.id,name:venue.name,rows,menuItems:venueItems.map(item=>({id:item.id,name:item.name}))};
+  });
+  return <PosMappingWorkspace organisationId={organisationId} venues={workspaces}/>;
+}
+
+async function inventoryCounts(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>,organisationId:string,venues:Venue[]){
+  const [{data:locationData},{data:productData},{data:countData},{data:movementData}]=await Promise.all([
+    supabase.from("stock_locations").select("id,venue_id,name").eq("organisation_id",organisationId).eq("active",true).order("name"),
+    supabase.from("products").select("id,name,category,package_quantity").eq("organisation_id",organisationId).order("category").order("name"),
+    supabase.from("stock_counts").select("id,trading_date,count_type,status,location_id").eq("organisation_id",organisationId).order("counted_at",{ascending:false}).limit(50),
+    supabase.from("stock_movements").select("id,venue_id,location_id,product_id,trading_date,movement_type,quantity").eq("organisation_id",organisationId).order("created_at",{ascending:false}).limit(100),
+  ]);
+  return <InventoryCountWorkspace organisationId={organisationId} venues={venues} locations={(locationData??[]) as unknown as {id:string;venue_id:string;name:string}[]} products={(productData??[]) as unknown as {id:string;name:string;category:string;package_quantity:string}[]} counts={(countData??[]) as unknown as {id:string;trading_date:string;count_type:string;status:string;location_id:string}[]} movements={(movementData??[]) as unknown as {id:string;venue_id:string;location_id:string;product_id:string;trading_date:string;movement_type:string;quantity:string}[]}/>;
+}
+
+async function reconciliationWorkspace(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>,organisationId:string,venues:Venue[]){
+  const {data:runsData}=await supabase.from("reconciliation_runs").select("id,venue_id,trading_date,version,status,input_hash,data_completeness_basis_points,created_at").eq("organisation_id",organisationId).order("created_at",{ascending:false}).limit(30);
+  const runs=(runsData??[]) as unknown as {id:string;venue_id:string;trading_date:string;version:number;status:string;input_hash:string;data_completeness_basis_points:number;created_at:string}[];
+  const ids=runs.map(run=>run.id);
+  const [{data:checksData},{data:summaryData},{data:resultData},{data:exceptionData},{data:productData},{data:locationData}]=await Promise.all([
+    ids.length?supabase.from("reconciliation_readiness_checks").select("id,reconciliation_id,classification,title_nl,title_en,why_it_matters_nl,why_it_matters_en,financial_exposure_minor,resolution_path").eq("organisation_id",organisationId).in("reconciliation_id",ids):Promise.resolve({data:[]}),
+    ids.length?supabase.from("reconciliation_summaries").select("reconciliation_id,expected_gross_revenue_minor,recorded_gross_revenue_minor,revenue_variance_minor,beverage_cost_variance_minor,margin_impact_minor,result_hash").eq("organisation_id",organisationId).in("reconciliation_id",ids):Promise.resolve({data:[]}),
+    ids.length?supabase.from("reconciliation_product_results").select("reconciliation_id,product_id,location_id,actual_consumption,theoretical_consumption,variance_quantity,cost_variance_minor,evidence_confidence").eq("organisation_id",organisationId).in("reconciliation_id",ids):Promise.resolve({data:[]}),
+    ids.length?supabase.from("reconciliation_exceptions").select("id,reconciliation_id,venue_id,exception_type,status,severity,financial_impact_minor,factual_description,suggested_actions").eq("organisation_id",organisationId).in("reconciliation_id",ids).order("financial_impact_minor",{ascending:false}):Promise.resolve({data:[]}),
+    supabase.from("products").select("id,name").eq("organisation_id",organisationId),
+    supabase.from("stock_locations").select("id,name").eq("organisation_id",organisationId),
+  ]);
+  return <ReconciliationWorkspace organisationId={organisationId} venues={venues} runs={runs}
+    checks={(checksData??[]) as unknown as {id:string;reconciliation_id:string;classification:string;title_nl:string;title_en:string;why_it_matters_nl:string;why_it_matters_en:string;financial_exposure_minor:string|null;resolution_path:string}[]}
+    summaries={(summaryData??[]) as unknown as {reconciliation_id:string;expected_gross_revenue_minor:string;recorded_gross_revenue_minor:string;revenue_variance_minor:string;beverage_cost_variance_minor:string;margin_impact_minor:string;result_hash:string}[]}
+    productResults={(resultData??[]) as unknown as {reconciliation_id:string;product_id:string;location_id:string;actual_consumption:string;theoretical_consumption:string;variance_quantity:string;cost_variance_minor:string|null;evidence_confidence:string}[]}
+    exceptions={(exceptionData??[]) as unknown as {id:string;reconciliation_id:string;venue_id:string;exception_type:string;status:string;severity:string;financial_impact_minor:string|null;factual_description:string;suggested_actions:string[]}[]}
+    productNames={Object.fromEntries(((productData??[]) as unknown as {id:string;name:string}[]).map(row=>[row.id,row.name]))}
+    locationNames={Object.fromEntries(((locationData??[]) as unknown as {id:string;name:string}[]).map(row=>[row.id,row.name]))}/>;
 }
 
 async function dashboard(supabase:Awaited<ReturnType<typeof createSupabaseServerClient>>, organisationId:string, venues:Venue[], closes:Close[]) {

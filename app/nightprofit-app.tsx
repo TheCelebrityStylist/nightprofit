@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { OperatingDemo } from "./operating-demo";
 
 type Locale = "nl" | "en";
 type Page = "dashboard" | "close" | "events" | "margins" | "invoices" | "imports" | "alerts" | "reports" | "settings";
@@ -160,12 +161,14 @@ export function NightProfitApp({ initialPath = "/" }: { initialPath?: string }) 
   const [locale, setLocale] = useState<Locale>("nl");
   const [page, setPage] = useState<Page>(initialPage);
   const [publicView, setPublicView] = useState(!(initialPath.startsWith("/app")||initialPath==="/demo"));
+  const [demoMode,setDemoMode]=useState(initialPath==="/demo");
   const [menuOpen, setMenuOpen] = useState(false);
   const [toast, setToast] = useState("");
   const t=useMemo(()=>strings[locale],[locale]);
   const navigate=(p:Page)=>{setPage(p);setPublicView(false);setMenuOpen(false);window.history.replaceState({}, "", `/app/${p}`)};
   const done=()=>{setToast("Afsluiting ingediend voor goedkeuring");setPage("dashboard");setTimeout(()=>setToast(""),3500)};
-  if(publicView) return <PublicPage onDemo={()=>{setPublicView(false);window.history.replaceState({},"","/demo")}}/>;
+  if(demoMode)return <OperatingDemo onExit={()=>{setDemoMode(false);setPublicView(true);window.history.replaceState({},"","/")}}/>;
+  if(publicView) return <PublicPage onDemo={()=>{setDemoMode(true);setPublicView(false);window.history.replaceState({},"","/demo")}}/>;
   return <div className="app-shell">
     <aside className={menuOpen?"open":""}>
       <div className="brand"><span className="logo">N</span><b>NightProfit</b></div>

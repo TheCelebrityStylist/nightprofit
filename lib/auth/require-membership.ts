@@ -5,7 +5,7 @@ export async function requireMembership(organisationId:string, capability?:Capab
   const supabase=await createSupabaseServerClient();
   const { data:{user} }=await supabase.auth.getUser();
   if(!user) throw new Error("UNAUTHENTICATED");
-  const {data,error}=await supabase.from("organisation_members").select("role").eq("organisation_id",organisationId).eq("user_id",user.id).single();
+  const {data,error}=await supabase.from("organisation_members").select("role").eq("organisation_id",organisationId).eq("user_id",user.id).eq("active",true).single();
   if(error||!data) throw new Error("FORBIDDEN");
   if(capability){
     const {data:allowed,error:capabilityError}=await supabase.rpc("has_capability",{
