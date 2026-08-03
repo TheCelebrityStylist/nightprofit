@@ -7,6 +7,7 @@ const callback = readFileSync(new URL("../app/auth/callback/route.ts", import.me
 const updateRoute = readFileSync(new URL("../app/api/auth/update/route.ts", import.meta.url), "utf8");
 const updatePage = readFileSync(new URL("../app/update-password/page.tsx", import.meta.url), "utf8");
 const form = readFileSync(new URL("../app/auth-form.tsx", import.meta.url), "utf8");
+const sessionRoute = readFileSync(new URL("../app/api/auth/session/route.ts", import.meta.url), "utf8");
 const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
 
 describe("Supabase activation and recovery contracts", () => {
@@ -19,6 +20,15 @@ describe("Supabase activation and recovery contracts", () => {
   it("accepts token-hash invitation and recovery links without exposing tokens", () => {
     expect(callback).toContain("verifyOtp({ token_hash: tokenHash, type: requestedType })");
     expect(callback).not.toMatch(/console\.(?:log|warn|error)\([^\n]*(?:tokenHash|code)/);
+  });
+
+  it("converts managed-email fragment sessions into verified httpOnly cookies", () => {
+    expect(form).toContain('fragment.get("access_token")');
+    expect(form).toContain('window.history.replaceState(null,"",window.location.pathname+window.location.search)');
+    expect(form).toContain('fetch("/api/auth/session"');
+    expect(sessionRoute).toContain("supabase.auth.setSession");
+    expect(sessionRoute).toContain("supabase.auth.getUser()");
+    expect(sessionRoute).not.toMatch(/console\.(?:log|warn|error)/);
   });
 
   it.each(["missing", "invalid", "expired", "reused", "missing PKCE verifier"]) (
