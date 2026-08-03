@@ -7,8 +7,10 @@
     "node": ">=22.13.0"
   },
   "overrides": {
+    "brace-expansion": "1.1.18",
     "postcss": "8.5.23",
-    "sharp": "0.35.2"
+    "sharp": "0.35.2",
+    "undici": "8.10.0"
   },
   "scripts": {
     "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vite",

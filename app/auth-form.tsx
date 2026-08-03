@@ -4,23 +4,30 @@ import Link from "next/link";
 import { AuthLocaleProvider, AuthLocaleSwitch, useAuthLocale } from "./auth-locale";
 import type { AuthLocale } from "../lib/i18n/authenticated";
 
-export function AuthForm({ mode, locale = "nl" }: { mode:"login"|"signup"|"forgot"|"update"; locale?:AuthLocale }) {
-  return <AuthLocaleProvider initialLocale={locale}><LocalizedAuthForm mode={mode}/></AuthLocaleProvider>;
+type AuthErrorCode="LINK_INVALID"|"RECOVERY_SESSION_MISSING"|"PASSWORD_POLICY"|"PASSWORD_MISMATCH"|"TOO_MANY_ATTEMPTS"|"AUTH_CONFIGURATION_INCOMPLETE"|"AUTH_NETWORK"|"AUTH_UNEXPECTED"|"PASSWORD_UPDATE_FAILED";
+
+export function AuthForm({ mode, locale = "nl", initialError }: { mode:"login"|"signup"|"forgot"|"update"; locale?:AuthLocale;initialError?:AuthErrorCode }) {
+  return <AuthLocaleProvider initialLocale={locale}><LocalizedAuthForm mode={mode} initialError={initialError}/></AuthLocaleProvider>;
 }
 
-function LocalizedAuthForm({ mode }: { mode:"login"|"signup"|"forgot"|"update" }) {
+function LocalizedAuthForm({ mode,initialError }: { mode:"login"|"signup"|"forgot"|"update";initialError?:AuthErrorCode }) {
   const { t, locale } = useAuthLocale();
+  const authErrorMessages:Record<AuthErrorCode,Parameters<typeof t>[0]>={LINK_INVALID:"auth.linkInvalid",RECOVERY_SESSION_MISSING:"auth.sessionMissing",PASSWORD_POLICY:"auth.passwordPolicy",PASSWORD_MISMATCH:"auth.passwordMismatch",TOO_MANY_ATTEMPTS:"auth.tooManyAttempts",AUTH_CONFIGURATION_INCOMPLETE:"auth.configurationIncomplete",AUTH_NETWORK:"auth.networkError",AUTH_UNEXPECTED:"auth.unexpectedError",PASSWORD_UPDATE_FAILED:"auth.unexpectedError"};
+  const [errorCode,setErrorCode]=useState<AuthErrorCode|undefined>(initialError);
   const [message,setMessage]=useState("");
   const [busy,setBusy]=useState(false);
   async function submit(e:FormEvent<HTMLFormElement>){
-    e.preventDefault(); setBusy(true); setMessage("");
+    e.preventDefault(); if(busy)return; setBusy(true); setMessage(""); setErrorCode(undefined);
     const body=Object.fromEntries(new FormData(e.currentTarget));
-    const response=await fetch(`/api/auth/${mode}`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
-    const result=await response.json().catch(()=>({errorCode:"UNKNOWN"})) as {error?:string;errorCode?:string;redirect?:string;message?:string;messageCode?:string};
-    setBusy(false);
-    if(!response.ok){setMessage(result.errorCode ? t("auth.genericError") : result.error??t("auth.genericError"));return;}
-    if(result.redirect){window.location.assign(result.redirect);return;}
-    setMessage(result.messageCode ? t("auth.checkEmail") : result.message??t("auth.checkEmail"));
+    if(mode==="update"&&body.password!==body.confirmPassword){setBusy(false);setErrorCode("PASSWORD_MISMATCH");return;}
+    delete body.confirmPassword;
+    try{const response=await fetch(`/api/auth/${mode}`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+      const result=await response.json().catch(()=>({errorCode:"AUTH_UNEXPECTED"})) as {error?:string;errorCode?:string;redirect?:string;message?:string;messageCode?:string};
+      setBusy(false);
+      if(!response.ok){setErrorCode((result.errorCode&&result.errorCode in authErrorMessages?result.errorCode:"AUTH_UNEXPECTED") as AuthErrorCode);return;}
+      if(result.redirect){window.location.assign(result.redirect);return;}
+      setMessage(result.messageCode ? t("auth.checkEmail") : result.message??t("auth.checkEmail"));
+    }catch{setBusy(false);setErrorCode("AUTH_NETWORK");}
   }
   return <main className="auth-page" lang={locale}><div className="auth-brand-row"><Link href="/" className="brand"><span className="logo">N</span><b>NightProfit</b></Link><AuthLocaleSwitch/></div><section className="auth-card" aria-labelledby="auth-title">
     <span className="eyebrow">{mode==="login"?t("auth.secureLogin"):mode==="signup"?t("auth.start"):t("auth.recovery")}</span>
@@ -30,9 +37,11 @@ function LocalizedAuthForm({ mode }: { mode:"login"|"signup"|"forgot"|"update" }
       {mode==="signup"&&<label>{t("auth.name")}<input name="fullName" autoComplete="name" required minLength={2}/></label>}
       {mode!=="update"&&<label>{t("auth.email")}<input name="email" type="email" autoComplete="email" required/></label>}
       {mode!=="forgot"&&<label>{t("auth.password")}<input name="password" type="password" autoComplete={mode==="login"?"current-password":"new-password"} required minLength={10}/></label>}
-      <button className="primary" disabled={busy} aria-busy={busy}>{busy?t("auth.busy"):mode==="login"?t("auth.login"):mode==="signup"?t("auth.signup"):mode==="forgot"?t("auth.sendReset"):t("auth.updatePassword")}</button>
-      {message&&<div className="form-message" role={message===t("auth.genericError")?"alert":"status"} aria-live="polite">{message}</div>}
+      {mode==="update"&&<label>{t("auth.confirmPassword")}<input name="confirmPassword" type="password" autoComplete="new-password" required minLength={10}/></label>}
+      <button className="primary" disabled={busy||mode==="update"&&!!initialError} aria-busy={busy}>{busy?t("auth.busy"):mode==="login"?t("auth.login"):mode==="signup"?t("auth.signup"):mode==="forgot"?t("auth.sendReset"):t("auth.updatePassword")}</button>
+      {errorCode&&<div className="form-message error" role="alert" aria-live="assertive">{t(authErrorMessages[errorCode])}</div>}
+      {message&&<div className="form-message" role="status" aria-live="polite">{message}</div>}
     </form>
-    <footer>{mode==="login"?<><Link href="/forgot-password">{t("auth.forgot")}</Link><Link href="/signup">{t("auth.noAccount")}</Link></>:<Link href="/login">{t("auth.back")}</Link>}</footer>
+    <footer>{mode==="login"?<><Link href="/forgot-password">{t("auth.forgot")}</Link><Link href="/signup">{t("auth.noAccount")}</Link></>:<><Link href="/login">{t("auth.back")}</Link>{mode==="update"&&initialError?<Link href="/forgot-password">{t("auth.requestNewLink")}</Link>:null}</>}</footer>
   </section></main>;
 }
