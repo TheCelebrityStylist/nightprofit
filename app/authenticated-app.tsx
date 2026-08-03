@@ -20,6 +20,7 @@ import { PosImportWorkspace } from "./pos-import-workspace";
 import { PosMappingWorkspace } from "./pos-mapping-workspace";
 import { InventoryCountWorkspace } from "./inventory-count-workspace";
 import { ReconciliationWorkspace } from "./reconciliation-workspace";
+import { RosterBoard } from "./roster-board";
 import "./real-app.css";
 
 const navigation = [
@@ -27,20 +28,9 @@ const navigation = [
   ["nav.sales", "/app/bookings"],
   ["nav.planning", "/app/planning"],
   ["nav.inventory", "/app/inventory"],
-  ["nav.products", "/app/products"],
   ["nav.suppliers", "/app/suppliers"],
-  ["nav.myWork", "/app/my-work"],
-  ["nav.posImport", "/app/imports/pos"],
-  ["nav.posMapping", "/app/mappings/pos"],
-  ["nav.reconcile", "/app/reconcile"],
   ["nav.close", "/app/close"],
-  ["nav.yield", "/app/yield"],
-  ["nav.compliance", "/app/compliance"],
-  ["nav.alerts", "/app/alerts"],
-  ["nav.reports", "/app/reports"],
-  ["nav.integrations", "/app/integrations"],
   ["nav.settings", "/app/settings"],
-  ["nav.billing", "/app/billing"],
 ] as const;
 
 type Venue = { id: string; name: string; timezone: string };
@@ -913,6 +903,7 @@ async function planning(
     { data: proposalData },
     { data: requestData },
     { data: recipientData },
+    { data: absenceData },
   ] = await Promise.all([
     supabase
       .from("departments")
@@ -928,7 +919,7 @@ async function planning(
       .order("name"),
     supabase
       .from("staff_profiles")
-      .select("id,full_name,role_name")
+      .select("id,full_name,role_name,onboarding_status,contact_email")
       .eq("organisation_id", organisationId)
       .order("full_name"),
     supabase
@@ -968,6 +959,12 @@ async function planning(
       .eq("organisation_id", organisationId)
       .order("created_at", { ascending: false })
       .limit(200),
+    supabase
+      .from("staff_absences")
+      .select("id,venue_id,staff_id,starts_at,ends_at,absence_type,status,note")
+      .eq("organisation_id", organisationId)
+      .order("starts_at", { ascending: false })
+      .limit(200),
   ]);
   const departments = (departmentData ?? []) as unknown as {
     id: string;
@@ -986,6 +983,8 @@ async function planning(
     id: string;
     full_name: string;
     role_name: string;
+    onboarding_status: string;
+    contact_email: string | null;
   }[];
   const intervals = (intervalData ?? []) as unknown as {
     id: string;
@@ -1034,6 +1033,16 @@ async function planning(
     opened_at: string | null;
     submitted_at: string | null;
   }[];
+  const absences = (absenceData ?? []) as unknown as {
+    id: string;
+    venue_id: string;
+    staff_id: string;
+    starts_at: string;
+    ends_at: string;
+    absence_type: string;
+    status: string;
+    note: string | null;
+  }[];
   const departmentOptions = departments.map((row) => ({
     label: row.name,
     value: row.id,
@@ -1046,6 +1055,20 @@ async function planning(
       value: row.id,
     })),
   ];
+  return (
+    <RosterBoard
+      organisationId={organisationId}
+      venues={venues.map((venue) => ({ id: venue.id, name: venue.name }))}
+      departments={departments}
+      roles={roles}
+      staff={staff}
+      intervals={intervals}
+      initialShifts={shifts}
+      absences={absences}
+    />
+  );
+  /* The legacy form workspace remains below temporarily as a recovery reference,
+     but is intentionally unreachable while the product roster is active. */
   return (
     <div className="workflow-stack">
       <section className="connected-flow">
