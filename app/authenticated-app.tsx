@@ -21,6 +21,7 @@ import { PosMappingWorkspace } from "./pos-mapping-workspace";
 import { InventoryCountWorkspace } from "./inventory-count-workspace";
 import { ReconciliationWorkspace } from "./reconciliation-workspace";
 import { RosterBoard } from "./roster-board";
+import { ServiceAutopilot } from "./service-autopilot";
 import "./real-app.css";
 
 const navigation = [
@@ -627,6 +628,7 @@ async function dashboard(
     { data: intervals },
     { data: shifts },
     { data: actions },
+    { data: serviceOperations },
   ] = await Promise.all([
     supabase
       .from("booking_deposits")
@@ -667,12 +669,19 @@ async function dashboard(
     supabase
       .from("operating_actions")
       .select(
-        "id,title,rationale,severity,status,due_at,expected_impact_minor,venue_id",
+        "id,title,rationale,why_it_matters,recommended_response,severity,status,due_at,expected_impact_minor,venue_id,evidence_completeness_basis_points,rank_score,action_type,service_operation_id",
       )
       .eq("organisation_id", organisationId)
       .in("status", ["open", "approved", "in_progress"])
-      .order("created_at", { ascending: false })
+      .order("rank_score", { ascending: false })
       .limit(20),
+    supabase
+      .from("service_operations")
+      .select("id,venue_id,service_date,stage,status,demand_snapshot,staffing_snapshot,inventory_snapshot,readiness_checks,missing_evidence,stale_reasons")
+      .eq("organisation_id", organisationId)
+      .eq("service_date", today)
+      .order("version", { ascending: false })
+      .limit(1),
   ]);
   const unexplained = closes.filter(
     (close) => BigInt(close.difference_minor) !== 0n,
@@ -739,11 +748,31 @@ async function dashboard(
     title: string;
     rationale: string;
     severity: string;
+    status: string;
     due_at: string | null;
     expected_impact_minor: string | null;
+    why_it_matters: string | null;
+    recommended_response: string | null;
+    evidence_completeness_basis_points: number;
+    rank_score: string;
+    action_type: string;
   }[];
+  const serviceOperation = ((serviceOperations ?? [])[0] ?? null) as unknown as {
+    id: string;
+    venue_id: string;
+    service_date: string;
+    stage: string;
+    status: string;
+    demand_snapshot: Record<string,unknown>;
+    staffing_snapshot: Record<string,unknown>;
+    inventory_snapshot: Record<string,unknown>;
+    readiness_checks: Array<Record<string,unknown>>;
+    missing_evidence: string[];
+    stale_reasons: string[];
+  } | null;
   return (
     <>
+      <ServiceAutopilot organisationId={organisationId} venues={venues.map(venue=>({id:venue.id,name:venue.name}))} initialOperation={serviceOperation} actions={actionRows} />
       <section className="morning-brief">
         <div>
           <span className="eyebrow">{t("dashboard.brief")} · {today}</span>

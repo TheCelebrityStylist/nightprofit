@@ -78,6 +78,9 @@ export interface Database {
       reconciliation_product_results: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: never; Relationships: [] };
       reconciliation_summaries: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: never; Relationships: [] };
       reconciliation_exception_decisions: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: never; Relationships: [] };
+      service_operations: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      service_purchase_plans: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
+      service_operation_decisions: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: never; Relationships: [] };
     };
     Views: Record<string,never>;
     Functions: {
@@ -104,6 +107,8 @@ export interface Database {
       begin_reconciliation: { Args: { target_organisation_id:string;target_venue_id:string;target_trading_date:string;target_policy_version?:string;target_materiality_threshold_minor?:string }; Returns:Record<string,unknown> };
       decide_reconciliation_exception: { Args: { target_organisation_id:string;target_exception_id:string;target_action:string;target_reason:string;target_idempotency_key:string;target_evidence?:Json }; Returns:Record<string,unknown> };
       prepare_reconciliation_close: { Args: { target_organisation_id:string;target_venue_id:string;target_trading_date:string;target_reconciliation_id:string }; Returns:Record<string,unknown> };
+      prepare_service_operation: { Args: { target_organisation_id:string;target_venue_id:string;target_service_date:string }; Returns:Record<string,unknown> };
+      decide_service_operation: { Args: { target_organisation_id:string;target_service_operation_id:string;target_decision:string;target_reason:string }; Returns:Record<string,unknown> };
     };
     Enums: { member_role: MemberRole };
     CompositeTypes: Record<string,never>;
