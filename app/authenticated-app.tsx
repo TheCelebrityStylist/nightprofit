@@ -677,7 +677,7 @@ async function dashboard(
       .limit(20),
     supabase
       .from("service_operations")
-      .select("id,venue_id,service_date,stage,status,demand_snapshot,staffing_snapshot,inventory_snapshot,readiness_checks,missing_evidence,stale_reasons")
+      .select("id,venue_id,service_date,stage,status,demand_snapshot,staffing_snapshot,consumption_snapshot,inventory_snapshot,purchasing_snapshot,live_snapshot,outcome_snapshot,readiness_checks,missing_evidence,stale_reasons")
       .eq("organisation_id", organisationId)
       .eq("service_date", today)
       .order("version", { ascending: false })
@@ -765,7 +765,11 @@ async function dashboard(
     status: string;
     demand_snapshot: Record<string,unknown>;
     staffing_snapshot: Record<string,unknown>;
+    consumption_snapshot: Record<string,unknown>;
     inventory_snapshot: Record<string,unknown>;
+    purchasing_snapshot: Record<string,unknown>;
+    live_snapshot: Record<string,unknown>;
+    outcome_snapshot: Record<string,unknown>;
     readiness_checks: Array<Record<string,unknown>>;
     missing_evidence: string[];
     stale_reasons: string[];
