@@ -679,7 +679,7 @@ async function dashboard(
       .from("service_operations")
       .select("id,venue_id,service_date,stage,status,demand_snapshot,staffing_snapshot,consumption_snapshot,inventory_snapshot,purchasing_snapshot,live_snapshot,outcome_snapshot,readiness_checks,missing_evidence,stale_reasons")
       .eq("organisation_id", organisationId)
-      .eq("service_date", today)
+      .order("service_date", { ascending: false })
       .order("version", { ascending: false })
       .limit(1),
   ]);
