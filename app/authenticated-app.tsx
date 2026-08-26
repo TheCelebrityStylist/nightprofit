@@ -1984,7 +1984,9 @@ async function bookings(
     .eq("organisation_id", organisationId)
     .order("preferred_start");
   const rows = (data ?? []) as Inquiry[];
+  const inquiryOptions=rows.map(row=>({label:`${row.contact_name} · ${row.group_size}`,value:row.id}));
   return (
+    <div className="workflow-stack">
     <div className="split-workspace">
       <WorkflowForm
         organisationId={organisationId}
@@ -2049,6 +2051,16 @@ async function bookings(
           </div>
         ))}
       </RecordPanel>
+    </div>
+    {rows.length?<div className="split-workspace">
+      <WorkflowForm organisationId={organisationId} workflow="booking_quote" title={locale==="nl"?"Offerte vastleggen":"Record quote"} submitLabel={locale==="nl"?"Offerte goedkeuren":"Approve quote"} fields={[
+        {name:"inquiryId",label:locale==="nl"?"Aanvraag":"Inquiry",type:"select",required:true,options:inquiryOptions},
+        {name:"subtotal",label:locale==="nl"?"Subtotaal":"Subtotal",required:true},{name:"vatBasisPoints",label:"VAT",type:"select",required:true,options:[{label:"21%",value:"2100"},{label:"9%",value:"900"}]},{name:"deposit",label:locale==="nl"?"Aanbetaling":"Deposit",required:true},{name:"expiresAt",label:locale==="nl"?"Geldig tot":"Expires",type:"datetime-local",required:true}
+      ]}/>
+      <WorkflowForm organisationId={organisationId} workflow="booking_transition" title={locale==="nl"?"Boeking verder brengen":"Advance booking"} submitLabel={locale==="nl"?"Fase opslaan":"Save stage"} fields={[
+        {name:"inquiryId",label:locale==="nl"?"Aanvraag":"Inquiry",type:"select",required:true,options:inquiryOptions},{name:"status",label:locale==="nl"?"Nieuwe fase":"New stage",type:"select",required:true,options:["qualified","proposal","awaiting_deposit","confirmed","completed","lost","cancelled","expired"].map(value=>({label:authEnumLabel(locale,value),value}))},{name:"reason",label:locale==="nl"?"Reden":"Reason",type:"textarea",required:true}
+      ]}/>
+    </div>:null}
     </div>
   );
 }
@@ -2374,6 +2386,8 @@ async function suppliers(
         .order("created_at", { ascending: false }),
     ]);
   const rows = (supplierData ?? []) as Supplier[];
+  const contractRows=(contracts??[]) as unknown as {id:string;name:string;status:string;notice_deadline:string|null}[];
+  const discrepancyRows=(discrepancies??[]) as unknown as {id:string;discrepancy_type:string;status:string;financial_impact_minor:string;recommended_check:string}[];
   return (
     <div className="workflow-stack">
       <div className="split-workspace">
@@ -2397,12 +2411,18 @@ async function suppliers(
           ))}
         </RecordPanel>
       </div>
+      {rows.length?<div className="split-workspace">
+        <WorkflowForm organisationId={organisationId} workflow="supplier_contract" title={locale==="nl"?"Contract toevoegen":"Add contract"} submitLabel={locale==="nl"?"Contract opslaan":"Save contract"} fields={[
+          {name:"supplierId",label:locale==="nl"?"leverancier":"Supplier",type:"select",required:true,options:rows.map(row=>({label:row.name,value:row.id}))},{name:"venueId",label:locale==="nl"?"vestiging (optioneel)":"Venue (optional)",type:"select",options:[{label:locale==="nl"?"Alle vestigingen":"All venues",value:""}]},{name:"name",label:locale==="nl"?"Contractnaam":"Contract name",required:true},{name:"startDate",label:locale==="nl"?"Startdatum":"Start date",type:"date",required:true},{name:"endDate",label:locale==="nl"?"Einddatum":"End date",type:"date"},{name:"noticeDeadline",label:locale==="nl"?"Opzegdeadline":"Notice deadline",type:"date"},{name:"automaticRenewal",label:locale==="nl"?"Automatische verlenging":"Automatic renewal",type:"select",required:true,options:[{label:locale==="nl"?"Nee":"No",value:"false"},{label:locale==="nl"?"Ja":"Yes",value:"true"}]},{name:"terms",label:locale==="nl"?"Kernvoorwaarden":"Core terms",type:"textarea",required:true}
+        ]}/>
+        {contractRows.length?<WorkflowForm organisationId={organisationId} workflow="contract_transition" title={locale==="nl"?"Contractstatus":"Contract status"} submitLabel={locale==="nl"?"Status opslaan":"Save status"} fields={[{name:"contractId",label:"Contract",type:"select",required:true,options:contractRows.map(row=>({label:row.name,value:row.id}))},{name:"status",label:locale==="nl"?"Nieuwe status":"New status",type:"select",required:true,options:["active","notice_due","renewing","terminated","expired"].map(value=>({label:authEnumLabel(locale,value),value}))},{name:"reason",label:locale==="nl"?"Reden":"Reason",type:"textarea",required:true}]}/>:null}
+      </div>:null}
       <RecordPanel
         title={t("suppliers.contracts")}
         empty={t("suppliers.contractsEmpty")}
       >
         {(
-          (contracts ?? []) as unknown as {
+          contractRows as unknown as {
             id: string;
             name: string;
             status: string;
@@ -2420,7 +2440,7 @@ async function suppliers(
           </div>
         ))}
         {(
-          (discrepancies ?? []) as unknown as {
+          discrepancyRows as unknown as {
             id: string;
             discrepancy_type: string;
             status: string;
@@ -2437,6 +2457,7 @@ async function suppliers(
           </div>
         ))}
       </RecordPanel>
+      {discrepancyRows.length?<WorkflowForm organisationId={organisationId} workflow="discrepancy_resolution" title={locale==="nl"?"Afwijking beoordelen":"Resolve discrepancy"} submitLabel={locale==="nl"?"Besluit opslaan":"Save decision"} fields={[{name:"discrepancyId",label:locale==="nl"?"Afwijking":"Discrepancy",type:"select",required:true,options:discrepancyRows.map(row=>({label:`${row.discrepancy_type} · ${euro(row.financial_impact_minor,locale)}`,value:row.id}))},{name:"status",label:"Status",type:"select",required:true,options:["reviewing","accepted","disputed","resolved","dismissed"].map(value=>({label:authEnumLabel(locale,value),value}))},{name:"resolution",label:locale==="nl"?"Onderbouwd besluit":"Supported decision",type:"textarea",required:true},{name:"creditReceived",label:locale==="nl"?"Ontvangen credit":"Credit received"},{name:"verifiedRecovered",label:locale==="nl"?"Geverifieerd teruggewonnen":"Verified recovered"}]}/>:null}
     </div>
   );
 }
@@ -2464,7 +2485,7 @@ async function eventYield(
   const rows = (scenarioData ?? []) as unknown as Scenario[];
   const events = (eventData ?? []) as EventRow[];
   return (
-    <div className="split-workspace">
+    <div className="workflow-stack"><div className="split-workspace">
       <WorkflowForm
         organisationId={organisationId}
         workflow="event_yield"
@@ -2519,7 +2540,7 @@ async function eventYield(
           </div>
         ))}
       </RecordPanel>
-    </div>
+    </div>{rows.length?<WorkflowForm organisationId={organisationId} workflow="event_outcome" title={locale==="nl"?"werkelijk resultaat":"Actual outcome"} submitLabel={locale==="nl"?"Resultaat vergelijken":"Compare outcome"} fields={[{name:"scenarioId",label:"Scenario",type:"select",required:true,options:rows.map(row=>({label:`${events.find(event=>event.id===row.event_id)?.name??"Event"} · ${row.scenario}`,value:row.id}))},{name:"actualAttendance",label:locale==="nl"?"werkelijke bezoekers":"Actual attendance",type:"number",required:true},{name:"actualRevenue",label:locale==="nl"?"werkelijke omzet":"Actual revenue",required:true},{name:"actualContribution",label:locale==="nl"?"werkelijke bijdrage":"Actual contribution",required:true}]}/>:null}</div>
   );
 }
 
@@ -2591,6 +2612,7 @@ async function compliance(
           ))}
         </RecordPanel>
       </div>
+      {staff.length?<WorkflowForm organisationId={organisationId} workflow="staff_transition" title={locale==="nl"?"Onboardingbesluit":"Onboarding decision"} submitLabel={locale==="nl"?"Status opslaan":"Save status"} fields={[{name:"staffId",label:locale==="nl"?"medewerker":"Employee",type:"select",required:true,options:staff.map(row=>({label:row.full_name,value:row.id}))},{name:"status",label:"Status",type:"select",required:true,options:["in_progress","review_required","cleared","expired","suspended","rejected"].map(value=>({label:authEnumLabel(locale,value),value}))},{name:"reason",label:locale==="nl"?"Reden":"Reason",type:"textarea",required:true}]}/>:null}
       <div className="split-workspace">
         <WorkflowForm
           organisationId={organisationId}
@@ -2637,6 +2659,7 @@ async function compliance(
           ))}
         </RecordPanel>
       </div>
+      {incidents.some(row=>row.status==="draft")?<WorkflowForm organisationId={organisationId} workflow="incident_finalize" title={locale==="nl"?"incident definitief maken":"Finalize incident"} submitLabel={locale==="nl"?"Definitief vastleggen":"Finalize record"} fields={[{name:"incidentId",label:"incident",type:"select",required:true,options:incidents.filter(row=>row.status==="draft").map(row=>({label:`${row.category} · ${date(row.occurred_at,locale)}`,value:row.id}))},{name:"reason",label:locale==="nl"?"Reden voor finaliseren":"Reason for finalization",type:"textarea",required:true}]}/>:null}
     </div>
   );
 }

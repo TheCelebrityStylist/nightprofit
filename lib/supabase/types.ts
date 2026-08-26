@@ -29,6 +29,8 @@ export interface Database {
       compliance_policies: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: never; Relationships: [] };
       booking_deposits: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
       booking_quotes: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: never; Relationships: [] };
+      supplier_contract_versions: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: never; Relationships: [] };
+      event_forecast_outcomes: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: never; Relationships: [] };
       profit_recovery_ledger: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
       integration_connections: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };
       departments: { Row: Record<string,unknown>; Insert: Record<string,unknown>; Update: Record<string,unknown>; Relationships: [] };

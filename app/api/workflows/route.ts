@@ -6,7 +6,7 @@ import { add, breakEvenRevenue, eventContribution, marginBasisPoints, money } fr
 import { assertSameOrigin, securityErrorResponse } from "../../../lib/http/security";
 
 const envelope = z.object({
-  workflow: z.enum(["booking_inquiry", "supplier", "product", "menu_item", "event_yield", "staff_profile", "incident"]),
+  workflow: z.enum(["booking_inquiry", "booking_quote", "booking_transition", "supplier", "supplier_contract", "contract_transition", "discrepancy_resolution", "product", "menu_item", "event_yield", "event_outcome", "staff_profile", "staff_transition", "incident", "incident_finalize"]),
   organisationId: z.string().uuid(),
   locale: z.enum(["nl-NL", "en-US"]).default("nl-NL"),
   values: z.record(z.string(), z.string()),
@@ -19,9 +19,14 @@ const bookingSchema = z.object({
   occasion: z.string().trim().max(200).default(""), source: z.string().trim().min(1).max(80),
   preferences: z.string().trim().max(1000).default(""),
 });
+const bookingQuoteSchema=z.object({inquiryId:z.string().uuid(),subtotal:z.string(),vatBasisPoints:z.coerce.number().int().min(0).max(10000),deposit:z.string().default("0"),expiresAt:z.iso.datetime({local:true})});
+const bookingTransitionSchema=z.object({inquiryId:z.string().uuid(),status:z.enum(["qualified","proposal","awaiting_deposit","confirmed","completed","lost","cancelled","expired"]),reason:z.string().trim().min(5).max(1000)});
 const supplierSchema = z.object({
   name: z.string().trim().min(2).max(160), contactEmail: z.union([z.email(), z.literal("")]).default(""),
 });
+const supplierContractSchema=z.object({supplierId:z.string().uuid(),venueId:z.union([z.string().uuid(),z.literal("")]).default(""),name:z.string().trim().min(2).max(160),startDate:z.iso.date(),endDate:z.union([z.iso.date(),z.literal("")]).default(""),noticeDeadline:z.union([z.iso.date(),z.literal("")]).default(""),automaticRenewal:z.enum(["true","false"]),terms:z.string().trim().min(5).max(10000)});
+const contractTransitionSchema=z.object({contractId:z.string().uuid(),status:z.enum(["active","notice_due","renewing","terminated","expired"]),reason:z.string().trim().min(5).max(1000)});
+const discrepancyResolutionSchema=z.object({discrepancyId:z.string().uuid(),status:z.enum(["reviewing","accepted","disputed","resolved","dismissed"]),resolution:z.string().trim().min(5).max(2000),creditReceived:z.string().default("0"),verifiedRecovered:z.string().default("0")});
 const productSchema = z.object({
   supplierId:z.union([z.string().uuid(),z.literal("")]).default(""), name:z.string().trim().min(2).max(160),
   brand:z.string().trim().max(120).default(""), category:z.string().trim().min(2).max(120),
@@ -42,6 +47,7 @@ const eventSchema = z.object({
   ticketRevenue: z.string(), barRevenue: z.string(), staffing: z.string(), security: z.string(),
   entertainment: z.string(), stock: z.string(), otherCosts: z.string(),
 });
+const eventOutcomeSchema=z.object({scenarioId:z.string().uuid(),actualAttendance:z.coerce.number().int().min(0),actualRevenue:z.string(),actualContribution:z.string()});
 const staffSchema = z.object({
   fullName: z.string().trim().min(2).max(160), contactEmail: z.union([z.email(), z.literal("")]).default(""),
   roleName: z.string().trim().min(2).max(120), preferredLanguage: z.enum(["nl", "en"]),
@@ -52,6 +58,8 @@ const incidentSchema = z.object({
   category: z.string().trim().min(2).max(80), factualRecord: z.string().trim().min(10).max(10000),
   witnesses: z.string().trim().max(1000).default(""), actions: z.string().trim().max(2000).default(""),
 });
+const staffTransitionSchema=z.object({staffId:z.string().uuid(),status:z.enum(["in_progress","review_required","cleared","expired","suspended","rejected"]),reason:z.string().trim().min(5).max(1000)});
+const incidentFinalizeSchema=z.object({incidentId:z.string().uuid(),reason:z.string().trim().min(5).max(1000)});
 
 function iso(value:string) { return new Date(value).toISOString(); }
 function minor(value:string, locale:"nl-NL"|"en-US") { return decimalToMinor(value || "0", locale); }
@@ -74,6 +82,26 @@ export async function POST(request: Request) {
       if (error) throw error;
       return NextResponse.json({ message: "Aanvraag toegevoegd aan de pipeline." }, { status: 201 });
     }
+    if(input.workflow==="booking_quote"){
+      const values=bookingQuoteSchema.parse(input.values);const {supabase,user}=await requireMembership(input.organisationId,"bookings.manage");
+      const {data:inquiry,error:inquiryError}=await supabase.from("booking_inquiries").select("id,venue_id,status").eq("organisation_id",input.organisationId).eq("id",values.inquiryId).single();if(inquiryError||!inquiry)throw inquiryError??new Error("inquiry_missing");
+      const subtotal=minorValue(values.subtotal),vat=(subtotal*BigInt(values.vatBasisPoints)+5000n)/10000n,total=subtotal+vat,deposit=minorValue(values.deposit);
+      const {data:latest}=await supabase.from("booking_quotes").select("version").eq("organisation_id",input.organisationId).eq("inquiry_id",values.inquiryId).order("version",{ascending:false}).limit(1);
+      const version=Number(latest?.[0]?.version??0)+1,snapshot={subtotal_minor:String(subtotal),vat_minor:String(vat),total_minor:String(total),deposit_minor:String(deposit),version};
+      const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({...snapshot,inquiry_id:values.inquiryId})));const contentHash=Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,"0")).join("");
+      const {data:quote,error}=await supabase.from("booking_quotes").insert({organisation_id:input.organisationId,venue_id:inquiry.venue_id,inquiry_id:values.inquiryId,version,status:"approved",currency:"EUR",subtotal_minor:String(subtotal),vat_minor:String(vat),total_minor:String(total),deposit_minor:String(deposit),discount_minor:"0",line_snapshot:[snapshot],terms_snapshot:{external_delivery:"not_sent"},expires_at:iso(values.expiresAt),approved_by:user.id,content_hash:contentHash}).select("id").single();if(error||!quote)throw error??new Error("quote_failed");
+      await supabase.from("booking_inquiries").update({status:"proposal"}).eq("organisation_id",input.organisationId).eq("id",values.inquiryId);
+      await supabase.from("operational_events").insert({organisation_id:input.organisationId,venue_id:inquiry.venue_id,aggregate_type:"booking_inquiry",aggregate_id:values.inquiryId,event_type:"booking.quote_approved",actor_id:user.id,payload:{quote_id:quote.id,version,total_minor:String(total),external_delivery:"not_sent"}});
+      return NextResponse.json({message:"Offerteversie goedgekeurd en veilig opgeslagen; er is niets extern verstuurd."},{status:201});
+    }
+    if(input.workflow==="booking_transition"){
+      const values=bookingTransitionSchema.parse(input.values);const {supabase,user}=await requireMembership(input.organisationId,"bookings.manage");
+      const {data:row,error}=await supabase.from("booking_inquiries").select("id,venue_id,status").eq("organisation_id",input.organisationId).eq("id",values.inquiryId).single();if(error||!row)throw error??new Error("inquiry_missing");
+      const allowed:Record<string,string[]>={new:["qualified","lost","cancelled"],qualified:["proposal","lost","cancelled"],proposal:["awaiting_deposit","confirmed","lost","expired"],awaiting_deposit:["confirmed","lost","expired"],confirmed:["completed","cancelled"],completed:[],lost:[],cancelled:[],expired:[]};if(!allowed[row.status]?.includes(values.status))throw new Error("invalid_booking_transition");
+      const {error:updateError}=await supabase.from("booking_inquiries").update({status:values.status}).eq("organisation_id",input.organisationId).eq("id",values.inquiryId).eq("status",row.status);if(updateError)throw updateError;
+      await supabase.from("operational_events").insert({organisation_id:input.organisationId,venue_id:row.venue_id,aggregate_type:"booking_inquiry",aggregate_id:row.id,event_type:`booking.${values.status}`,actor_id:user.id,payload:{from:row.status,to:values.status,reason:values.reason}});
+      return NextResponse.json({message:"Boekingsfase bijgewerkt en vastgelegd."});
+    }
     if (input.workflow === "supplier") {
       const values = supplierSchema.parse(input.values);
       const { supabase } = await requireMembership(input.organisationId, "suppliers.manage");
@@ -83,6 +111,25 @@ export async function POST(request: Request) {
       });
       if (error) throw error;
       return NextResponse.json({ message: "Leverancier opgeslagen." }, { status: 201 });
+    }
+    if(input.workflow==="supplier_contract"){
+      const values=supplierContractSchema.parse(input.values);const {supabase,user}=await requireMembership(input.organisationId,"suppliers.manage",values.venueId||undefined);
+      const {data:contract,error}=await supabase.from("supplier_contracts").insert({organisation_id:input.organisationId,venue_id:values.venueId||null,supplier_id:values.supplierId,name:values.name,status:"draft",start_date:values.startDate,end_date:values.endDate||null,notice_deadline:values.noticeDeadline||null,automatic_renewal:values.automaticRenewal==="true",responsible_owner_id:user.id}).select("id").single();if(error||!contract)throw error??new Error("contract_failed");
+      const terms={summary:values.terms},digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({...terms,contract_id:contract.id,version:1}))),contentHash=Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,"0")).join("");
+      const {error:versionError}=await supabase.from("supplier_contract_versions").insert({organisation_id:input.organisationId,contract_id:contract.id,version:1,terms,price_list:[],discounts:[],rebates:[],content_hash:contentHash,effective_from:values.startDate,created_by:user.id});if(versionError)throw versionError;
+      await supabase.from("operational_events").insert({organisation_id:input.organisationId,venue_id:values.venueId||null,aggregate_type:"supplier_contract",aggregate_id:contract.id,event_type:"supplier_contract.created",actor_id:user.id,payload:{version:1}});
+      return NextResponse.json({message:"Contract en onveranderlijke eerste voorwaardenversie opgeslagen."},{status:201});
+    }
+    if(input.workflow==="contract_transition"){
+      const values=contractTransitionSchema.parse(input.values);const {supabase,user}=await requireMembership(input.organisationId,"suppliers.manage");const {data:rawRow,error}=await supabase.from("supplier_contracts").select("id,venue_id,status").eq("organisation_id",input.organisationId).eq("id",values.contractId).single();if(error||!rawRow)throw error??new Error("contract_missing");const row=rawRow as unknown as {id:string;venue_id:string|null;status:string};
+      const allowed:Record<string,string[]>={draft:["active","terminated"],active:["notice_due","renewing","terminated","expired"],notice_due:["renewing","terminated","expired"],renewing:["active","terminated","expired"],terminated:[],expired:[]};if(!allowed[row.status]?.includes(values.status))throw new Error("invalid_contract_transition");
+      const {error:updateError}=await supabase.from("supplier_contracts").update({status:values.status}).eq("organisation_id",input.organisationId).eq("id",row.id).eq("status",row.status);if(updateError)throw updateError;
+      await supabase.from("operational_events").insert({organisation_id:input.organisationId,venue_id:row.venue_id,aggregate_type:"supplier_contract",aggregate_id:row.id,event_type:`supplier_contract.${values.status}`,actor_id:user.id,payload:{from:row.status,to:values.status,reason:values.reason}});return NextResponse.json({message:"Contractstatus bijgewerkt en geaudit."});
+    }
+    if(input.workflow==="discrepancy_resolution"){
+      const values=discrepancyResolutionSchema.parse(input.values);const {supabase,user}=await requireMembership(input.organisationId,"suppliers.manage");const {data:rawRow,error}=await supabase.from("contract_discrepancies").select("id,venue_id,status").eq("organisation_id",input.organisationId).eq("id",values.discrepancyId).single();if(error||!rawRow)throw error??new Error("discrepancy_missing");const row=rawRow as unknown as {id:string;venue_id:string|null;status:string};
+      const {error:updateError}=await supabase.from("contract_discrepancies").update({status:values.status,resolution:values.resolution,credit_received_minor:String(minorValue(values.creditReceived)),verified_recovered_minor:String(minorValue(values.verifiedRecovered)),owner_id:user.id}).eq("organisation_id",input.organisationId).eq("id",row.id);if(updateError)throw updateError;
+      await supabase.from("operational_events").insert({organisation_id:input.organisationId,venue_id:row.venue_id,aggregate_type:"contract_discrepancy",aggregate_id:row.id,event_type:`contract_discrepancy.${values.status}`,actor_id:user.id,payload:{reason:values.resolution,credit_received_minor:String(minorValue(values.creditReceived)),verified_recovered_minor:String(minorValue(values.verifiedRecovered))}});return NextResponse.json({message:"Afwijking beoordeeld; financiële terugwinning is apart vastgelegd."});
     }
     if (input.workflow === "product") {
       const values=productSchema.parse(input.values);
@@ -153,6 +200,11 @@ export async function POST(request: Request) {
       if (error) throw error;
       return NextResponse.json({ message: `Basisscenario opgeslagen · marge ${Number(marginBasisPoints(contribution,revenue))/100}%` }, { status: 201 });
     }
+    if(input.workflow==="event_outcome"){
+      const values=eventOutcomeSchema.parse(input.values);const {supabase,user}=await requireMembership(input.organisationId,"events.manage");const {data:rawScenario,error}=await supabase.from("event_yield_scenarios").select("id,venue_id,attendance_low,revenue_low_minor,contribution_minor").eq("organisation_id",input.organisationId).eq("id",values.scenarioId).single();if(error||!rawScenario)throw error??new Error("scenario_missing");const scenario=rawScenario as unknown as {id:string;venue_id:string;attendance_low:number;revenue_low_minor:string;contribution_minor:string};
+      const actualRevenue=minorValue(values.actualRevenue),actualContribution=minorValue(values.actualContribution);const {error:outcomeError}=await supabase.from("event_forecast_outcomes").insert({organisation_id:input.organisationId,venue_id:scenario.venue_id,scenario_id:scenario.id,actual_attendance:values.actualAttendance,actual_revenue_minor:String(actualRevenue),actual_contribution_minor:String(actualContribution),attendance_error:values.actualAttendance-Number(scenario.attendance_low??0),revenue_error_minor:String(actualRevenue-BigInt(scenario.revenue_low_minor??0)),contribution_error_minor:String(actualContribution-BigInt(scenario.contribution_minor??0))});if(outcomeError)throw outcomeError;
+      await supabase.from("operational_events").insert({organisation_id:input.organisationId,venue_id:scenario.venue_id,aggregate_type:"event_yield_scenario",aggregate_id:scenario.id,event_type:"event.outcome_recorded",actor_id:user.id,payload:{actual_attendance:values.actualAttendance,actual_revenue_minor:String(actualRevenue),actual_contribution_minor:String(actualContribution)}});return NextResponse.json({message:"Werkelijk eventresultaat opgeslagen en deterministisch vergeleken."},{status:201});
+    }
     if (input.workflow === "staff_profile") {
       const values = staffSchema.parse(input.values);
       const { supabase } = await requireMembership(input.organisationId, "compliance.manage");
@@ -164,6 +216,14 @@ export async function POST(request: Request) {
       });
       if (error) throw error;
       return NextResponse.json({ message: "Beperkt medewerkersprofiel aangemaakt." }, { status: 201 });
+    }
+    if(input.workflow==="staff_transition"){
+      const values=staffTransitionSchema.parse(input.values);const {supabase,user}=await requireMembership(input.organisationId,"compliance.manage");const {data:rawRow,error}=await supabase.from("staff_profiles").select("id,onboarding_status").eq("organisation_id",input.organisationId).eq("id",values.staffId).single();if(error||!rawRow)throw error??new Error("staff_missing");const row=rawRow as unknown as {id:string;onboarding_status:string};
+      const {error:updateError}=await supabase.from("staff_profiles").update({onboarding_status:values.status}).eq("organisation_id",input.organisationId).eq("id",row.id);if(updateError)throw updateError;await supabase.from("operational_events").insert({organisation_id:input.organisationId,venue_id:null,aggregate_type:"staff_profile",aggregate_id:row.id,event_type:`staff.${values.status}`,actor_id:user.id,payload:{from:row.onboarding_status,to:values.status,reason:values.reason}});return NextResponse.json({message:"Onboardingstatus bijgewerkt en geaudit."});
+    }
+    if(input.workflow==="incident_finalize"){
+      const values=incidentFinalizeSchema.parse(input.values);const {supabase,user}=await requireMembership(input.organisationId,"compliance.manage");const {data:rawRow,error}=await supabase.from("staff_incidents").select("id,venue_id,status").eq("organisation_id",input.organisationId).eq("id",values.incidentId).single();if(error||!rawRow)throw error??new Error("incident_missing");const row=rawRow as unknown as {id:string;venue_id:string;status:string};if(row.status!=="draft")throw new Error("incident_already_finalized");
+      const {error:updateError}=await supabase.from("staff_incidents").update({status:"finalized",finalized_by:user.id,finalized_at:new Date().toISOString()}).eq("organisation_id",input.organisationId).eq("id",row.id).eq("status","draft");if(updateError)throw updateError;await supabase.from("operational_events").insert({organisation_id:input.organisationId,venue_id:row.venue_id,aggregate_type:"staff_incident",aggregate_id:row.id,event_type:"staff_incident.finalized",actor_id:user.id,payload:{reason:values.reason}});return NextResponse.json({message:"Incident definitief en onveranderlijk vastgelegd."});
     }
     const values = incidentSchema.parse(input.values);
     const { supabase, user } = await requireMembership(input.organisationId, "compliance.manage", values.venueId);
