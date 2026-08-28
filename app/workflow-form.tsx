@@ -46,6 +46,12 @@ export function WorkflowForm({
     setError("");
     setSuccess("");
     const values = Object.fromEntries(formData.entries());
+    for (const field of fields) {
+      const value = values[field.name];
+      if (field.type === "datetime-local" && typeof value === "string" && value) {
+        values[field.name] = new Date(value).toISOString();
+      }
+    }
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },

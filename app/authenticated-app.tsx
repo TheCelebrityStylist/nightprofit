@@ -1082,7 +1082,7 @@ async function planning(
   return (
     <RosterBoard
       organisationId={organisationId}
-      venues={venues.map((venue) => ({ id: venue.id, name: venue.name }))}
+      venues={venues.map((venue) => ({ id: venue.id, name: venue.name, timezone: venue.timezone }))}
       departments={departments}
       roles={roles}
       staff={staff}
@@ -1112,6 +1112,7 @@ async function planning(
       <div className="split-workspace">
         <AvailabilityManager
           organisationId={organisationId}
+          venueTimezone={venues[0]?.timezone ?? "Europe/Amsterdam"}
           venues={venues.map((v) => ({ id: v.id, label: v.name }))}
           staff={staff.map((person) => ({
             id: person.id,

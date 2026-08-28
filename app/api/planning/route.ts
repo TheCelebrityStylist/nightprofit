@@ -5,6 +5,7 @@ import {decimalToMinor} from "../../../lib/imports/locale-number";
 import {requiredStaff} from "../../../lib/operations/planning";
 import {assertSameOrigin,securityErrorResponse} from "../../../lib/http/security";
 import {rankSchedulingCandidates,type RosterObjective,type AvailabilityState} from "../../../lib/workforce/maestro";
+import {normalizeDutchPhone} from "../../../lib/workforce/domain";
 
 const envelope=z.object({
   organisationId:z.string().uuid(),
@@ -110,7 +111,17 @@ export async function POST(request:Request){
     if(input.action==="staff"){
       const values=staffSchema.parse(input.values);
       const {supabase,user}=await requireMembership(input.organisationId,"members.manage",values.venueId);
-      const {data,error}=await supabase.from("staff_profiles").insert({organisation_id:input.organisationId,full_name:values.fullName,contact_email:values.email||null,contact_phone:values.phone||null,preferred_language:values.preferredLanguage,engagement_type:values.engagementType,role_name:values.roleName,onboarding_status:"invited"}).select("id").single();
+      const phone=values.phone?normalizeDutchPhone(values.phone):null;
+      const email=values.email.toLowerCase()||null;
+      const duplicateQueries=[
+        email?supabase.from("staff_profiles").select("id").eq("organisation_id",input.organisationId).ilike("contact_email",email).limit(1):Promise.resolve({data:[],error:null}),
+        phone?supabase.from("staff_profiles").select("id").eq("organisation_id",input.organisationId).eq("contact_phone",phone).limit(1):Promise.resolve({data:[],error:null}),
+      ];
+      const duplicates=await Promise.all(duplicateQueries);
+      const duplicateError=duplicates.find(result=>result.error)?.error;
+      if(duplicateError)throw duplicateError;
+      if(duplicates.some(result=>result.data?.length))return NextResponse.json({errorCode:"DUPLICATE_STAFF"},{status:409});
+      const {data,error}=await supabase.from("staff_profiles").insert({organisation_id:input.organisationId,full_name:values.fullName,contact_email:email,contact_phone:phone,preferred_language:values.preferredLanguage,engagement_type:values.engagementType,role_name:values.roleName,onboarding_status:"invited"}).select("id").single();
       if(error||!data)throw error??new Error("STAFF_CREATE_FAILED");
       const assignments=supabase.from("staff_venue_assignments") as unknown as {insert:(value:Record<string,unknown>)=>Promise<{error:unknown}>};
       const {error:assignmentError}=await assignments.insert({organisation_id:input.organisationId,staff_id:data.id,venue_id:values.venueId});

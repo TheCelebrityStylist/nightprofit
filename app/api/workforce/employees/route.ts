@@ -23,10 +23,9 @@ export async function PUT(request:Request){
     const input=commitSchema.parse(await request.json());
     const {supabase}=await requireMembership(input.organisationId,"workforce.manage",input.venueId);
     const preview=previewEmployeeCsv(input.source);
-    if(preview.rejected.length) return NextResponse.json({errorCode:"REJECTED_ROWS_REMAIN",rejected:preview.rejected},{status:409});
     const rows=preview.accepted.map(row=>({...row,hourlyCostMinor:String(row.hourlyCostMinor),decision:input.decisions[String(row.rowNumber)]??"create"}));
     const {data,error}=await supabase.rpc("import_staff_profiles" as "create_organisation",{target_organisation_id:input.organisationId,target_venue_id:input.venueId,target_rows:rows,target_idempotency_key:input.idempotencyKey} as never);
     if(error)throw error;
-    return NextResponse.json({message:"Employee import committed with tenant-scoped duplicate decisions.",result:data},{status:201});
+    return NextResponse.json({message:"Employee import committed with tenant-scoped duplicate decisions.",result:data,rejected:preview.rejected},{status:201});
   }catch(error){return securityErrorResponse(error)??NextResponse.json({errorCode:error instanceof z.ZodError?"VALIDATION_FAILED":"EMPLOYEE_IMPORT_FAILED"},{status:400})}
 }

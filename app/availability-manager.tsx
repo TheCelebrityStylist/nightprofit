@@ -2,28 +2,36 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthLocale } from "./auth-locale";
+import { zonedInputToUtc } from "@/lib/workforce/timezone";
 
 type Option = { id: string; label: string };
 export function AvailabilityManager({
   organisationId,
+  venueTimezone,
   venues,
   staff,
 }: {
   organisationId: string;
+  venueTimezone: string;
   venues: Option[];
   staff: Option[];
 }) {
   const { t } = useAuthLocale();
   const router = useRouter();
   const [selected, setSelected] = useState<string[]>([]);
-  const [activeVenueId,setActiveVenueId]=useState(venues[0]?.id||"");
+  const [activeVenueId, setActiveVenueId] = useState(venues[0]?.id || "");
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [links, setLinks] = useState<Record<string, string>>({});
   const [requestId, setRequestId] = useState("");
   const [recipientIds, setRecipientIds] = useState<Record<string, string>>({});
-  const [shares, setShares] = useState<Record<string, {message:string;whatsappUrl:string|null;phoneState:"valid"|"missing"|"invalid"}>>({});
+  const [shares, setShares] = useState<
+    Record<
+      string,
+      { message: string; whatsappUrl: string | null; phoneState: "valid" | "missing" | "invalid" }
+    >
+  >({});
   async function submit(formData: FormData) {
     setPending(true);
     setError("");
@@ -36,9 +44,9 @@ export function AvailabilityManager({
       body: JSON.stringify({
         organisationId,
         venueId: formData.get("venueId"),
-        startsAt: formData.get("startsAt"),
-        endsAt: formData.get("endsAt"),
-        deadlineAt: formData.get("deadlineAt"),
+        startsAt: zonedInputToUtc(String(formData.get("startsAt")), venueTimezone),
+        endsAt: zonedInputToUtc(String(formData.get("endsAt")), venueTimezone),
+        deadlineAt: zonedInputToUtc(String(formData.get("deadlineAt")), venueTimezone),
         staffIds: selected,
       }),
     });
@@ -46,26 +54,42 @@ export function AvailabilityManager({
       error?: string;
       message?: string;
       links?: Record<string, string>;
-      requestId?:string;
-      recipientIdsByStaff?:Record<string,string>;
-      shares?:Record<string,{message:string;whatsappUrl:string|null;phoneState:"valid"|"missing"|"invalid"}>;
+      requestId?: string;
+      recipientIdsByStaff?: Record<string, string>;
+      shares?: Record<
+        string,
+        { message: string; whatsappUrl: string | null; phoneState: "valid" | "missing" | "invalid" }
+      >;
     };
     setPending(false);
     if (!response.ok) {
       setError(t("common.saveFailed"));
       return;
     }
-    setMessage(t("availability.sent"));
+    setMessage(t("availability.prepared"));
     setLinks(result.links || {});
-    setRequestId(result.requestId||"");
-    setRecipientIds(result.recipientIdsByStaff||{});
-    setShares(result.shares||{});
+    setRequestId(result.requestId || "");
+    setRecipientIds(result.recipientIdsByStaff || {});
+    setShares(result.shares || {});
     router.refresh();
   }
-  async function markShared(staffId:string){
-    const recipientId=recipientIds[staffId];if(!requestId||!recipientId)return;
-    const response=await fetch("/api/availability",{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({organisationId,venueId:activeVenueId,action:"manual_share",requestId,recipientIds:[recipientId],idempotencyKey:crypto.randomUUID()})});
-    if(response.ok)setMessage(t("availability.sent"));else setError(t("common.saveFailed"));
+  async function markShared(staffId: string) {
+    const recipientId = recipientIds[staffId];
+    if (!requestId || !recipientId) return;
+    const response = await fetch("/api/availability", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        organisationId,
+        venueId: activeVenueId,
+        action: "manual_share",
+        requestId,
+        recipientIds: [recipientId],
+        idempotencyKey: crypto.randomUUID(),
+      }),
+    });
+    if (response.ok) setMessage(t("availability.sent"));
+    else setError(t("common.saveFailed"));
   }
   return (
     <form className="workflow-card" action={submit}>
@@ -73,7 +97,12 @@ export function AvailabilityManager({
       <div className="workflow-fields">
         <label>
           {t("common.venue")}
-          <select name="venueId" required value={activeVenueId} onChange={event=>setActiveVenueId(event.target.value)}>
+          <select
+            name="venueId"
+            required
+            value={activeVenueId}
+            onChange={(event) => setActiveVenueId(event.target.value)}
+          >
             <option value="" disabled>
               {t("common.choose")}
             </option>
@@ -133,21 +162,45 @@ export function AvailabilityManager({
           {Object.entries(links).map(([id, url]) => (
             <div className="share-recipient" key={id}>
               <b>{staff.find((s) => s.id === id)?.label}</b>
-              <span>{shares[id]?.phoneState==="valid"?"WhatsApp":shares[id]?.phoneState==="missing"?"No telephone number":"Invalid telephone number"}</span>
-              <textarea readOnly value={shares[id]?.message||url} aria-label={`${staff.find((s) => s.id === id)?.label} message`} />
+              <span>
+                {shares[id]?.phoneState === "valid"
+                  ? "WhatsApp"
+                  : shares[id]?.phoneState === "missing"
+                    ? "No telephone number"
+                    : "Invalid telephone number"}
+              </span>
+              <textarea
+                readOnly
+                value={shares[id]?.message || url}
+                aria-label={`${staff.find((s) => s.id === id)?.label} message`}
+              />
               <div className="share-actions">
-                {shares[id]?.whatsappUrl?<a className="primary" href={shares[id].whatsappUrl!} target="_blank" rel="noreferrer" onClick={()=>void markShared(id)}>Open in WhatsApp</a>:null}
-                <button type="button" className="secondary" onClick={async()=>{await navigator.clipboard.writeText(shares[id]?.message||url);await markShared(id)}}>Copy message</button>
+                {shares[id]?.whatsappUrl ? (
+                  <a
+                    className="primary"
+                    href={shares[id].whatsappUrl!}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open in WhatsApp
+                  </a>
+                ) : null}
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => navigator.clipboard.writeText(shares[id]?.message || url)}
+                >
+                  Copy message
+                </button>
+                <button type="button" className="secondary" onClick={() => void markShared(id)}>
+                  Mark as manually shared
+                </button>
               </div>
             </div>
           ))}
         </div>
       ) : null}
-      <button
-        className="primary"
-        disabled={pending || !selected.length}
-        aria-busy={pending}
-      >
+      <button className="primary" disabled={pending || !selected.length} aria-busy={pending}>
         {pending ? t("availability.sending") : t("availability.create")}
       </button>
     </form>
