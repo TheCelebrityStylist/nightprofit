@@ -966,18 +966,16 @@ async function planning(
     supabase
       .from("shifts")
       .select(
-        "id,venue_id,department_id,role_id,staff_id,starts_at,ends_at,break_minutes,hourly_cost_minor,status",
+        "id,venue_id,department_id,role_id,staff_id,starts_at,ends_at,break_minutes,hourly_cost_minor,status,revision",
       )
       .eq("organisation_id", organisationId)
       .order("starts_at", { ascending: false })
       .limit(50),
     supabase
-      .from("ai_proposals")
-      .select(
-        "id,action_type,rationale,proposed_change,missing_data,confidence_basis,approval_status,execution_status,created_at",
-      )
+      .from("roster_proposals")
+      .select("id,venue_id,objective,status,result_summary,created_at")
       .eq("organisation_id", organisationId)
-      .eq("action_type", "schedule_proposal")
+      .in("status", ["current", "applied"])
       .order("created_at", { ascending: false })
       .limit(10),
     supabase
@@ -1039,16 +1037,9 @@ async function planning(
     break_minutes: number;
     hourly_cost_minor: string;
     status: string;
+    revision: number;
   }[];
-  const proposals = (proposalData ?? []) as unknown as {
-    id: string;
-    rationale: string;
-    missing_data: string[];
-    confidence_basis: string;
-    approval_status: string;
-    execution_status: string;
-    created_at: string;
-  }[];
+  const proposals = (proposalData ?? []) as unknown as {id:string;venue_id:string;objective:string;status:string;result_summary:{coverage_basis_points:number;unfilled_assignments:number;total_planned_minutes:number;planned_cost_minor:string;preferred_assignments:number;missing_evidence:string[]};created_at:string;approval_status:string;rationale:string;confidence_basis:string;execution_status:string;missing_data:string[]}[];
   const requests = (requestData ?? []) as unknown as {
     id: string;
     venue_id: string;
@@ -1098,6 +1089,7 @@ async function planning(
       intervals={intervals}
       initialShifts={shifts}
       absences={absences}
+      proposals={proposals}
     />
   );
   /* The legacy form workspace remains below temporarily as a recovery reference,
@@ -1502,6 +1494,7 @@ async function myWork(
     { data: responseData },
     { data: timeData },
     { data: availabilityData },
+    { data: absenceData },
   ] = await Promise.all([
     supabase
       .from("shifts")
@@ -1533,6 +1526,7 @@ async function myWork(
       .gte("ends_at", new Date().toISOString())
       .order("starts_at")
       .limit(14),
+    supabase.from("staff_absences").select("id,venue_id,starts_at,ends_at,absence_type,status,note").eq("organisation_id",organisationId).eq("staff_id",staff.id).order("starts_at",{ascending:false}).limit(20),
   ]);
   const shifts = (shiftData ?? []) as unknown as {
     id: string;
@@ -1561,6 +1555,7 @@ async function myWork(
     ends_at: string;
     availability: string;
   }[];
+  const ownAbsences=(absenceData??[]) as unknown as {id:string;venue_id:string;starts_at:string;ends_at:string;absence_type:string;status:string;note:string|null}[];
   const openRecord = records.find((record) => !record.clocked_out_at);
   const next = shifts[0];
   return (
@@ -1580,7 +1575,7 @@ async function myWork(
         </span>
       </section>
       {openRecord ? (
-        <WorkflowForm
+        <div className="workflow-stack"><WorkflowForm
           endpoint="/api/workforce"
           organisationId={organisationId}
           workflow="clock_out"
@@ -1600,7 +1595,7 @@ async function myWork(
               ],
             },
           ]}
-        />
+        /><div className="split-workspace"><WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="start_break" title={locale==="nl"?"Pauze":"Break"} submitLabel={locale==="nl"?"Start pauze":"Start break"} fields={[{name:"timeRecordId",label:t("myWork.timeRecord"),type:"select",required:true,options:[{label:t("myWork.activeShift"),value:openRecord.id}]}]}/><WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="end_break" title={locale==="nl"?"Lopende pauze":"Active break"} submitLabel={locale==="nl"?"Beëindig pauze":"End break"} fields={[{name:"timeRecordId",label:t("myWork.timeRecord"),type:"select",required:true,options:[{label:t("myWork.activeShift"),value:openRecord.id}]}]}/></div></div>
       ) : next ? (
         <WorkflowForm
           endpoint="/api/workforce"
@@ -1727,6 +1722,10 @@ async function myWork(
           </div>
         )}
       </section>
+      <div className="split-workspace">
+        <WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="request_leave" title={locale==="nl"?"Vrij vragen":"Request leave"} submitLabel={locale==="nl"?"Aanvraag indienen":"Submit request"} fields={[{name:"venueId",label:t("common.venue"),type:"select",required:true,options:venueOptions(venues)},{name:"startsAt",label:locale==="nl"?"Vanaf":"From",type:"datetime-local",required:true},{name:"endsAt",label:locale==="nl"?"Tot":"Until",type:"datetime-local",required:true},{name:"note",label:locale==="nl"?"Notitie (optioneel)":"Note (optional)",type:"textarea"}]}/>
+        <WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="report_sickness" title={locale==="nl"?"Ziek melden":"Report sickness"} submitLabel={locale==="nl"?"Veilig melden":"Report securely"} fields={[{name:"venueId",label:t("common.venue"),type:"select",required:true,options:venueOptions(venues)},{name:"startsAt",label:locale==="nl"?"Vanaf":"From",type:"datetime-local",required:true},{name:"endsAt",label:locale==="nl"?"Geschat tot":"Expected until",type:"datetime-local",required:true},{name:"note",label:locale==="nl"?"Korte operationele notitie":"Short operational note",type:"textarea"}]}/>
+      </div><RecordPanel title={locale==="nl"?"Aanvragen":"Requests"} empty={locale==="nl"?"Er zijn nog geen vrije dagen of ziekmeldingen.":"No leave or sickness requests."}>{ownAbsences.map(row=><div className="record-row" key={row.id}><b>{authEnumLabel(locale,row.absence_type)}</b><span>{date(row.starts_at,locale)}–{date(row.ends_at,locale)}</span><em>{authEnumLabel(locale,row.status)}</em></div>)}</RecordPanel>
       <div className="split-workspace">
         <RecordPanel
           title={t("myWork.availability")}

@@ -8,7 +8,7 @@ export function hashAvailabilityToken(token:string){
   if(!/^[A-Za-z0-9_-]{43}$/.test(token))throw new Error("Invalid availability token");
   return createHash("sha256").update(token,"utf8").digest("hex");
 }
-export type AvailabilityEntry={startsAt:string;endsAt:string;availability:"available"|"preferred"|"unavailable";note?:string};
+export type AvailabilityEntry={startsAt:string;endsAt:string;availability:"available"|"preferred"|"preferably_not"|"unavailable";note?:string};
 export function validateAvailabilityEntries(entries:AvailabilityEntry[],periodStart:string,periodEnd:string){
   if(!entries.length||entries.length>100)throw new Error("Availability entries required");
   const start=new Date(periodStart).getTime(),end=new Date(periodEnd).getTime();

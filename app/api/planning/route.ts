@@ -4,27 +4,29 @@ import {requireMembership} from "../../../lib/auth/require-membership";
 import {decimalToMinor} from "../../../lib/imports/locale-number";
 import {requiredStaff} from "../../../lib/operations/planning";
 import {assertSameOrigin,securityErrorResponse} from "../../../lib/http/security";
+import {rankSchedulingCandidates,type RosterObjective,type AvailabilityState} from "../../../lib/workforce/maestro";
 
 const envelope=z.object({
   organisationId:z.string().uuid(),
   locale:z.enum(["nl-NL","en-US"]).default("nl-NL"),
-  action:z.enum(["department","role","forecast","shift","shift_update","shift_cancel","copy_week","staff","staff_deactivate","absence","absence_decide","publish","availability","proposal","resolve_action"]),
+  action:z.enum(["department","role","forecast","shift","shift_update","shift_cancel","copy_week","staff","staff_deactivate","absence","absence_decide","publish","availability","proposal","proposal_apply","resolve_action"]),
   values:z.record(z.string(),z.string()),
 });
 const departmentSchema=z.object({venueId:z.string().uuid(),name:z.string().trim().min(2).max(100)});
 const roleSchema=z.object({departmentId:z.string().uuid(),name:z.string().trim().min(2).max(100),hourlyCost:z.string(),minimumStaff:z.coerce.number().int().min(0).max(100),guestsPerStaff:z.coerce.number().int().positive().max(1000)});
 const forecastSchema=z.object({venueId:z.string().uuid(),tradingDate:z.iso.date(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),expectedGuests:z.coerce.number().int().min(0).max(100000),expectedRevenue:z.string(),minimumStaff:z.coerce.number().int().min(0).max(100),guestsPerStaff:z.coerce.number().int().positive().max(1000),managerNote:z.string().trim().max(1000).default("")});
 const shiftSchema=z.object({venueId:z.string().uuid(),departmentId:z.string().uuid(),roleId:z.string().uuid(),staffId:z.union([z.string().uuid(),z.literal("open")]),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),breakMinutes:z.coerce.number().int().min(0).max(480),hourlyCost:z.string()});
-const shiftUpdateSchema=shiftSchema.extend({shiftId:z.string().uuid()});
+const shiftUpdateSchema=shiftSchema.extend({shiftId:z.string().uuid(),expectedRevision:z.coerce.number().int().positive().default(1)});
 const shiftCancelSchema=z.object({venueId:z.string().uuid(),shiftId:z.string().uuid()});
 const copyWeekSchema=z.object({venueId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),idempotencyKey:z.string().uuid()});
 const staffSchema=z.object({venueId:z.string().uuid(),fullName:z.string().trim().min(2).max(140),email:z.union([z.literal(""),z.email()]),phone:z.string().trim().max(40),roleName:z.string().trim().min(2).max(100),engagementType:z.enum(["employee","contractor","temporary"]),preferredLanguage:z.enum(["nl","en"])});
 const staffDeactivateSchema=z.object({staffId:z.string().uuid()});
 const absenceSchema=z.object({venueId:z.string().uuid(),staffId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),absenceType:z.enum(["leave","sickness","other"]),note:z.string().trim().max(500)});
 const absenceDecisionSchema=z.object({venueId:z.string().uuid(),absenceId:z.string().uuid(),decision:z.enum(["approved","rejected"])});
-const publishSchema=z.object({venueId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true})});
+const publishSchema=z.object({venueId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),expectedRevision:z.coerce.number().int().positive(),idempotencyKey:z.string().uuid()});
 const availabilitySchema=z.object({venueId:z.string().uuid(),staffId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),availability:z.enum(["available","preferred","unavailable"]),note:z.string().trim().max(500).default("")});
-const proposalSchema=z.object({venueId:z.string().uuid(),tradingDate:z.iso.date()});
+const proposalSchema=z.object({venueId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true})});
+const proposalApplySchema=z.object({venueId:z.string().uuid(),proposalId:z.string().uuid()});
 const resolveSchema=z.object({actionId:z.string().uuid(),resolution:z.string().trim().min(5).max(2000)});
 const iso=(value:string)=>new Date(value).toISOString();
 
@@ -78,8 +80,8 @@ export async function POST(request:Request){
         const {data:overlaps}=await supabase.from("shifts").select("id").eq("organisation_id",input.organisationId).eq("staff_id",values.staffId).neq("id",values.shiftId).lt("starts_at",endsAt).gt("ends_at",startsAt).not("status","in","(cancelled,rejected)").limit(1);
         if(overlaps?.length)return NextResponse.json({errorCode:"SHIFT_OVERLAP"},{status:409});
       }
-      const {data,error}=await supabase.from("shifts").update({department_id:values.departmentId,role_id:values.roleId,staff_id:values.staffId==="open"?null:values.staffId,starts_at:startsAt,ends_at:endsAt,break_minutes:values.breakMinutes,hourly_cost_minor:decimalToMinor(values.hourlyCost,input.locale).toString(),status:"draft",source:"manager",created_by:user.id,updated_at:new Date().toISOString()}).eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).eq("id",values.shiftId).select("id").single();
-      if(error||!data)throw error??new Error("SHIFT_NOT_FOUND");
+      const {data,error}=await supabase.from("shifts").update({department_id:values.departmentId,role_id:values.roleId,staff_id:values.staffId==="open"?null:values.staffId,starts_at:startsAt,ends_at:endsAt,break_minutes:values.breakMinutes,hourly_cost_minor:decimalToMinor(values.hourlyCost,input.locale).toString(),status:"draft",source:"manager",created_by:user.id,updated_at:new Date().toISOString(),revision:values.expectedRevision+1}).eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).eq("id",values.shiftId).eq("revision",values.expectedRevision).eq("locked",false).select("id").single();
+      if(error||!data)throw error??new Error("CONCURRENT_SHIFT_EDIT");
       return NextResponse.json({message:"Conceptrooster automatisch opgeslagen."});
     }
     if(input.action==="shift_cancel"){
@@ -139,9 +141,9 @@ export async function POST(request:Request){
     if(input.action==="publish"){
       const values=publishSchema.parse(input.values);
       const {supabase}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
-      const {data,error}=await supabase.rpc("publish_roster",{target_organisation_id:input.organisationId,target_venue_id:values.venueId,window_start:iso(values.startsAt),window_end:iso(values.endsAt)});
+      const {data,error}=await supabase.rpc("publish_roster_v2" as "publish_roster",{target_organisation_id:input.organisationId,target_venue_id:values.venueId,target_window_start:iso(values.startsAt),target_window_end:iso(values.endsAt),target_expected_revision:values.expectedRevision,target_idempotency_key:values.idempotencyKey,target_acknowledged_exceptions:[]} as never);
       if(error)throw error;
-      return NextResponse.json({message:`${data} dienst(en) gepubliceerd.`});
+      return NextResponse.json({message:`Roosterversie ${(data as unknown as {version?:number})?.version??""} onveranderlijk gepubliceerd.`});
     }
     if(input.action==="availability"){
       const values=availabilitySchema.parse(input.values);
@@ -158,17 +160,48 @@ export async function POST(request:Request){
     if(input.action==="proposal"){
       const values=proposalSchema.parse(input.values);
       const {supabase,user}=await requireMembership(input.organisationId,"ai.propose",values.venueId);
-      const dayStart=`${values.tradingDate}T00:00:00.000Z`,dayEnd=`${values.tradingDate}T23:59:59.999Z`;
-      const [{data:intervals},{data:shifts}]=await Promise.all([
-        supabase.from("demand_forecast_intervals").select("expected_guests,expected_revenue_minor,required_staff,starts_at,ends_at").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).gte("starts_at",dayStart).lte("starts_at",dayEnd),
-        supabase.from("shifts").select("id,staff_id,starts_at,ends_at,status").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).gte("starts_at",dayStart).lte("starts_at",dayEnd).not("status","in","(cancelled,rejected)"),
+      const windowStart=iso(values.startsAt),windowEnd=iso(values.endsAt);if(new Date(windowEnd)<=new Date(windowStart))throw new Error("INVALID_WINDOW");
+      const [{data:intervals},{data:shifts},{data:roleData},{data:staffData},{data:assignmentData},{data:qualificationData},{data:availabilityData},{data:absenceData}]=await Promise.all([
+        supabase.from("demand_forecast_intervals").select("expected_guests,expected_revenue_minor,required_staff,starts_at,ends_at").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).gte("starts_at",windowStart).lt("starts_at",windowEnd).order("starts_at"),
+        supabase.from("shifts").select("staff_id,starts_at,ends_at,status").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).lt("starts_at",windowEnd).gt("ends_at",windowStart).not("status","in","(cancelled,rejected)"),
+        supabase.from("operational_roles").select("id,department_id,hourly_cost_minor,minimum_staff,guests_per_staff").eq("organisation_id",input.organisationId).eq("active",true),
+        supabase.from("staff_profiles").select("id,effective_hourly_cost_minor,contracted_minutes_week,employment_status,onboarding_status").eq("organisation_id",input.organisationId),
+        supabase.from("staff_venue_assignments").select("staff_id").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId),
+        supabase.from("staff_role_qualifications").select("staff_id,role_id,qualified_until").eq("organisation_id",input.organisationId),
+        supabase.from("staff_availability").select("staff_id,starts_at,ends_at,availability").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).lt("starts_at",windowEnd).gt("ends_at",windowStart),
+        supabase.from("staff_absences").select("staff_id,starts_at,ends_at,status").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).in("status",["approved","recorded"]).lt("starts_at",windowEnd).gt("ends_at",windowStart),
       ]);
-      const intervalRows=(intervals??[]) as unknown as {required_staff:number;starts_at:string;ends_at:string}[];
-      const shiftRows=(shifts??[]) as unknown as {staff_id:string|null;starts_at:string;ends_at:string}[];
-      const gaps=intervalRows.map(interval=>({starts_at:interval.starts_at,ends_at:interval.ends_at,required:interval.required_staff,planned:shiftRows.filter(shift=>new Date(shift.starts_at)<new Date(interval.ends_at)&&new Date(shift.ends_at)>new Date(interval.starts_at)).length})).filter(gap=>gap.required!==gap.planned);
-      const {error}=await supabase.from("ai_proposals").insert({organisation_id:input.organisationId,venue_id:values.venueId,action_type:"schedule_proposal",proposed_change:{staffing_gaps:gaps},rationale:gaps.length?"Pas de conceptdiensten aan op de vastgelegde intervalvraag.":"De huidige conceptbezetting dekt de vastgelegde intervalvraag.",expected_effect:{gap_count:gaps.length},evidence_refs:[],input_snapshot:{trading_date:values.tradingDate,interval_count:intervalRows.length,shift_count:shiftRows.length},missing_data:intervalRows.length?["Geen gekalibreerde historische confidence beschikbaar."]:["Geen intervalforecast beschikbaar."],confidence_basis:"Deterministische vergelijking; geen modelconfidence.",model_version:"deterministic-fallback-1",prompt_version:"schedule-v1",approval_status:"proposed",execution_status:"not_started",created_by:user.id});
-      if(error)throw error;
-      return NextResponse.json({message:"Uitlegbare planningpropositie aangemaakt; er is niets automatisch gewijzigd."},{status:201});
+      const intervalRows=(intervals??[]) as unknown as {expected_guests:number;expected_revenue_minor:string;required_staff:number;starts_at:string;ends_at:string}[];
+      if(!intervalRows.length)throw new Error("FORECAST_REQUIRED");
+      const roleRows=(roleData??[]) as unknown as {id:string;department_id:string;hourly_cost_minor:string;minimum_staff:number;guests_per_staff:number}[];if(!roleRows.length)throw new Error("ROLES_REQUIRED");
+      const staffRows=(staffData??[]) as unknown as {id:string;effective_hourly_cost_minor:string|null;contracted_minutes_week:number|null;employment_status:string;onboarding_status:string}[];
+      const assigned=new Set(((assignmentData??[]) as unknown as {staff_id:string}[]).map(row=>row.staff_id));
+      const qualifications=(qualificationData??[]) as unknown as {staff_id:string;role_id:string;qualified_until:string|null}[];
+      const availability=(availabilityData??[]) as unknown as {staff_id:string;starts_at:string;ends_at:string;availability:AvailabilityState}[];
+      const absences=(absenceData??[]) as unknown as {staff_id:string;starts_at:string;ends_at:string}[];
+      const existing=(shifts??[]) as unknown as {staff_id:string|null;starts_at:string;ends_at:string}[];
+      const objectives:RosterObjective[]=["balanced","lowest_cost","preference"];
+      const inputSnapshot={window_start:windowStart,window_end:windowEnd,intervals:intervalRows,role_ids:roleRows.map(row=>row.id),staff_ids:staffRows.map(row=>row.id)};
+      const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify(inputSnapshot))),inputHash=Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,"0")).join("");
+      const proposals=objectives.map(objective=>{
+        const shiftPlan:Record<string,unknown>[]=[],plannedMinutes=new Map<string,number>();let unfilled=0,totalRequired=0,totalCost=0n,preferredAssignments=0;
+        for(const interval of intervalRows){const intervalStart=new Date(interval.starts_at),intervalEnd=new Date(interval.ends_at),minutes=Math.floor((intervalEnd.getTime()-intervalStart.getTime())/60000),used=new Set<string>();
+          for(const role of roleRows){const required=Math.max(role.minimum_staff,Math.ceil(interval.expected_guests/role.guests_per_staff));totalRequired+=required;
+            const candidates=staffRows.map(staff=>{const window=availability.find(row=>row.staff_id===staff.id&&new Date(row.starts_at)<=intervalStart&&new Date(row.ends_at)>=intervalEnd),state=window?.availability??"unknown";const qualified=qualifications.some(row=>row.staff_id===staff.id&&row.role_id===role.id&&(!row.qualified_until||row.qualified_until>=interval.starts_at.slice(0,10)));const absent=absences.some(row=>row.staff_id===staff.id&&new Date(row.starts_at)<intervalEnd&&new Date(row.ends_at)>intervalStart);const occupied=existing.some(row=>row.staff_id===staff.id&&new Date(row.starts_at)<intervalEnd&&new Date(row.ends_at)>intervalStart)||used.has(staff.id);return{staffId:staff.id,hourlyCostMinor:BigInt(staff.effective_hourly_cost_minor??role.hourly_cost_minor),contractedMinutes:staff.contracted_minutes_week??0,alreadyPlannedMinutes:plannedMinutes.get(staff.id)??0,availability:state,eligible:assigned.has(staff.id)&&staff.onboarding_status!=="suspended"&&staff.employment_status!=="deactivated"&&qualified&&!absent&&!occupied}});
+            const ranked=rankSchedulingCandidates(candidates,objective);
+            for(let index=0;index<required;index++){const chosen=ranked[index];if(chosen){used.add(chosen.staffId);plannedMinutes.set(chosen.staffId,(plannedMinutes.get(chosen.staffId)??0)+minutes);totalCost+=(BigInt(minutes)*chosen.hourlyCostMinor+30n)/60n;if(chosen.availability==="preferred")preferredAssignments+=1} else unfilled+=1;shiftPlan.push({department_id:role.department_id,role_id:role.id,staff_id:chosen?.staffId??null,starts_at:interval.starts_at,ends_at:interval.ends_at,break_minutes:0,hourly_cost_minor:String(chosen?.hourlyCostMinor??BigInt(role.hourly_cost_minor))})}
+          }
+        }
+        return{organisation_id:input.organisationId,venue_id:values.venueId,window_start:windowStart,window_end:windowEnd,objective,status:"current",input_hash:inputHash,input_snapshot:inputSnapshot,result_summary:{coverage_basis_points:totalRequired?Math.round((totalRequired-unfilled)*10000/totalRequired):10000,required_assignments:totalRequired,unfilled_assignments:unfilled,total_planned_minutes:[...plannedMinutes.values()].reduce((sum,value)=>sum+value,0),planned_cost_minor:String(totalCost),preferred_assignments:preferredAssignments,missing_evidence:staffRows.length?[]:["employees"]},shift_plan:shiftPlan,created_by:user.id};
+      });
+      await supabase.from("roster_proposals").update({status:"stale"}).eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).eq("status","current");
+      const {data:created,error}=await supabase.from("roster_proposals").insert(proposals).select("id,objective,result_summary");if(error)throw error;
+      return NextResponse.json({message:"Drie geldige, uitlegbare roosteropties opgeslagen. Kies een optie om conceptdiensten te maken.",proposals:created},{status:201});
+    }
+    if(input.action==="proposal_apply"){
+      const values=proposalApplySchema.parse(input.values);const {supabase}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
+      const {data,error}=await supabase.rpc("apply_roster_proposal" as "clock_out",{target_organisation_id:input.organisationId,target_proposal_id:values.proposalId} as never);if(error)throw error;
+      return NextResponse.json({message:`Roosteroptie toegepast als bewerkbaar concept (${(data as unknown as {created?:number})?.created??0} diensten).`});
     }
     const values=resolveSchema.parse(input.values);
     const {supabase,user}=await requireMembership(input.organisationId,"actions.manage");

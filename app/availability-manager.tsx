@@ -16,15 +16,20 @@ export function AvailabilityManager({
   const { t } = useAuthLocale();
   const router = useRouter();
   const [selected, setSelected] = useState<string[]>([]);
+  const [activeVenueId,setActiveVenueId]=useState(venues[0]?.id||"");
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [links, setLinks] = useState<Record<string, string>>({});
+  const [requestId, setRequestId] = useState("");
+  const [recipientIds, setRecipientIds] = useState<Record<string, string>>({});
+  const [shares, setShares] = useState<Record<string, {message:string;whatsappUrl:string|null;phoneState:"valid"|"missing"|"invalid"}>>({});
   async function submit(formData: FormData) {
     setPending(true);
     setError("");
     setMessage("");
     setLinks({});
+    setShares({});
     const response = await fetch("/api/availability", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -41,6 +46,9 @@ export function AvailabilityManager({
       error?: string;
       message?: string;
       links?: Record<string, string>;
+      requestId?:string;
+      recipientIdsByStaff?:Record<string,string>;
+      shares?:Record<string,{message:string;whatsappUrl:string|null;phoneState:"valid"|"missing"|"invalid"}>;
     };
     setPending(false);
     if (!response.ok) {
@@ -49,7 +57,15 @@ export function AvailabilityManager({
     }
     setMessage(t("availability.sent"));
     setLinks(result.links || {});
+    setRequestId(result.requestId||"");
+    setRecipientIds(result.recipientIdsByStaff||{});
+    setShares(result.shares||{});
     router.refresh();
+  }
+  async function markShared(staffId:string){
+    const recipientId=recipientIds[staffId];if(!requestId||!recipientId)return;
+    const response=await fetch("/api/availability",{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({organisationId,venueId:activeVenueId,action:"manual_share",requestId,recipientIds:[recipientId],idempotencyKey:crypto.randomUUID()})});
+    if(response.ok)setMessage(t("availability.sent"));else setError(t("common.saveFailed"));
   }
   return (
     <form className="workflow-card" action={submit}>
@@ -57,7 +73,7 @@ export function AvailabilityManager({
       <div className="workflow-fields">
         <label>
           {t("common.venue")}
-          <select name="venueId" required defaultValue="">
+          <select name="venueId" required value={activeVenueId} onChange={event=>setActiveVenueId(event.target.value)}>
             <option value="" disabled>
               {t("common.choose")}
             </option>
@@ -115,14 +131,15 @@ export function AvailabilityManager({
           <b>{t("availability.fallback")}</b>
           <p>{t("availability.fallbackHelp")}</p>
           {Object.entries(links).map(([id, url]) => (
-            <label key={id}>
-              {staff.find((s) => s.id === id)?.label}
-              <input
-                readOnly
-                value={url}
-                onFocus={(event) => event.currentTarget.select()}
-              />
-            </label>
+            <div className="share-recipient" key={id}>
+              <b>{staff.find((s) => s.id === id)?.label}</b>
+              <span>{shares[id]?.phoneState==="valid"?"WhatsApp":shares[id]?.phoneState==="missing"?"No telephone number":"Invalid telephone number"}</span>
+              <textarea readOnly value={shares[id]?.message||url} aria-label={`${staff.find((s) => s.id === id)?.label} message`} />
+              <div className="share-actions">
+                {shares[id]?.whatsappUrl?<a className="primary" href={shares[id].whatsappUrl!} target="_blank" rel="noreferrer" onClick={()=>void markShared(id)}>Open in WhatsApp</a>:null}
+                <button type="button" className="secondary" onClick={async()=>{await navigator.clipboard.writeText(shares[id]?.message||url);await markShared(id)}}>Copy message</button>
+              </div>
+            </div>
           ))}
         </div>
       ) : null}
