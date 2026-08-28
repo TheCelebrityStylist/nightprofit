@@ -6,6 +6,7 @@ import { useAuthLocale } from "./auth-locale";
 import { AvailabilityManager } from "./availability-manager";
 import { EmployeeCsvImport } from "./employee-csv-import";
 import { utcToZonedInput, zonedInputToUtc } from "@/lib/workforce/timezone";
+import { calculateCoverage, rankReplacements, rosterHealth, simulateDemand } from "@/lib/workforce/decision-support";
 
 type Venue = { id: string; name: string; timezone: string };
 type Department = { id: string; venue_id: string; name: string };
@@ -23,7 +24,14 @@ type Staff = {
   role_name: string;
   onboarding_status?: string;
   contact_email?: string | null;
+  effective_hourly_cost_minor?: string | null;
+  contracted_minutes_week?: number | null;
+  maximum_minutes_week?: number | null;
+  preferences?: Record<string,unknown>;
 };
+type StaffAvailability={staff_id:string;venue_id:string;starts_at:string;ends_at:string;availability:"available"|"preferred"|"preferably_not"|"unavailable";submitted_at:string|null;source:string};
+type Qualification={staff_id:string;role_id:string;qualified_until:string|null};
+type TimeRecord={id:string;venue_id:string;staff_id:string;shift_id:string|null;clocked_in_at:string;clocked_out_at:string|null;break_minutes:number;status:string;approved_at:string|null};
 type Interval = {
   id: string;
   venue_id: string;
@@ -45,6 +53,7 @@ type Shift = {
   hourly_cost_minor: string;
   status: string;
   revision?: number;
+  locked?: boolean;
 };
 type Absence = {
   id: string;
@@ -93,6 +102,9 @@ export function RosterBoard({
   intervals,
   initialShifts,
   absences,
+  staffAvailability,
+  qualifications,
+  timeRecords,
   proposals,
 }: {
   organisationId: string;
@@ -103,6 +115,9 @@ export function RosterBoard({
   intervals: Interval[];
   initialShifts: Shift[];
   absences: Absence[];
+  staffAvailability: StaffAvailability[];
+  qualifications: Qualification[];
+  timeRecords: TimeRecord[];
   proposals: Proposal[];
 }) {
   const { locale } = useAuthLocale(),
@@ -122,6 +137,7 @@ export function RosterBoard({
   } | null>(null);
   const [busy, setBusy] = useState(false),
     [message, setMessage] = useState("");
+  const [scenarioBasisPoints, setScenarioBasisPoints] = useState(0);
   const venueTimezone = venues.find((row) => row.id === venueId)?.timezone ?? "Europe/Amsterdam";
   const toUtc = (value: string) => zonedInputToUtc(value, venueTimezone);
   const toLocal = (value: string) => utcToZonedInput(value, venueTimezone);
@@ -164,6 +180,44 @@ export function RosterBoard({
       maximumFractionDigits: 0,
     }).format(Number(minor) / 100);
   const percent = revenue ? `${Number((labor * 10000n) / revenue) / 100}%` : "—";
+  const coverageIntervals = calculateCoverage(
+    visibleIntervals.map((row) => ({id:row.id,startsAt:row.starts_at,endsAt:row.ends_at,roleId:"all",requiredStaff:row.required_staff,expectedRevenueMinor:BigInt(row.expected_revenue_minor)})),
+    visibleShifts.map((row) => ({id:row.id,startsAt:row.starts_at,endsAt:row.ends_at,roleId:"all",staffId:row.staff_id,hourlyCostMinor:BigInt(row.hourly_cost_minor),breakMinutes:row.break_minutes})),
+  );
+  const scenario = scenarioBasisPoints ? simulateDemand(coverageIntervals, scenarioBasisPoints) : null;
+  const health = rosterHealth({
+    coverage: coverageIntervals,
+    hardConstraintViolations: 0,
+    availabilityConflicts: visibleShifts.filter((shift) => absences.some((absence) => absence.staff_id === shift.staff_id && absence.status !== "rejected" && new Date(absence.starts_at) < new Date(shift.ends_at) && new Date(absence.ends_at) > new Date(shift.starts_at))).length,
+    skillConflicts: 0,
+    laborBasisPoints: revenue ? Number((labor * 10_000n) / revenue) : null,
+    targetLaborBasisPoints: 2_000,
+    hourImbalances: 0,
+    preferenceMisses: proposals.find((row) => row.objective === "preference")?.result_summary.unfilled_assignments ?? 0,
+    breakConflicts: 0,
+    missingEvidence: visibleIntervals.length ? [] : ["demand"],
+  });
+  const sicknessCases = absences.filter((absence)=>absence.venue_id===venueId&&absence.absence_type==="sickness"&&absence.status==="recorded").flatMap((absence)=>
+    visibleShifts.filter((shift)=>shift.staff_id===absence.staff_id&&new Date(shift.starts_at)<new Date(absence.ends_at)&&new Date(shift.ends_at)>new Date(absence.starts_at)).map((shift)=>{
+      const shiftMinutes=Math.floor((new Date(shift.ends_at).getTime()-new Date(shift.starts_at).getTime())/60000)-shift.break_minutes;
+      const replacements=rankReplacements(activeStaff.filter(person=>person.id!==absence.staff_id).map(person=>{
+        const availability=staffAvailability.find(row=>row.staff_id===person.id&&row.venue_id===venueId&&new Date(row.starts_at)<=new Date(shift.starts_at)&&new Date(row.ends_at)>=new Date(shift.ends_at));
+        const qualified=qualifications.some(row=>row.staff_id===person.id&&row.role_id===shift.role_id&&(!row.qualified_until||row.qualified_until>=shift.starts_at.slice(0,10)));
+        const other=visibleShifts.filter(row=>row.staff_id===person.id&&row.id!==shift.id);
+        const overlapping=other.some(row=>new Date(row.starts_at)<new Date(shift.ends_at)&&new Date(row.ends_at)>new Date(shift.starts_at));
+        const restCompliant=!other.some(row=>{const before=new Date(shift.starts_at).getTime()-new Date(row.ends_at).getTime(),after=new Date(row.starts_at).getTime()-new Date(shift.ends_at).getTime();return before>=0&&before<11*3600000||after>=0&&after<11*3600000});
+        const alreadyPlanned=other.reduce((sum,row)=>sum+Math.max(0,Math.floor((new Date(row.ends_at).getTime()-new Date(row.starts_at).getTime())/60000)-row.break_minutes),0);
+        const candidateCost=BigInt(person.effective_hourly_cost_minor??shift.hourly_cost_minor);
+        return{staffId:person.id,eligible:!overlapping,available:availability?.availability!=="unavailable"&&availability!==undefined,restCompliant,skillsValid:qualified,projectedMinutes:alreadyPlanned+shiftMinutes,maximumMinutes:person.maximum_minutes_week??null,costDifferenceMinor:((candidateCost-BigInt(shift.hourly_cost_minor))*BigInt(shiftMinutes)+30n)/60n,preferred:availability?.availability==="preferred"};
+      }));
+      return{absence,shift,replacements};
+    }),
+  );
+  const venueRecords=timeRecords.filter(record=>record.venue_id===venueId);
+  const pendingRecords=venueRecords.filter(record=>record.status==="submitted"&&record.clocked_out_at);
+  const approvedRecords=venueRecords.filter(record=>record.status==="approved"&&record.clocked_out_at);
+  const approvedMinutes=approvedRecords.reduce((sum,record)=>sum+Math.max(0,Math.floor((new Date(record.clocked_out_at!).getTime()-new Date(record.clocked_in_at).getTime())/60000)-record.break_minutes),0);
+  const actualLabor=approvedRecords.reduce((sum,record)=>{const minutes=Math.max(0,Math.floor((new Date(record.clocked_out_at!).getTime()-new Date(record.clocked_in_at).getTime())/60000)-record.break_minutes);const person=staff.find(row=>row.id===record.staff_id);return sum+(BigInt(person?.effective_hourly_cost_minor??"0")*BigInt(minutes)+30n)/60n},0n);
 
   async function mutate(action: string, values: Record<string, string>, optimistic?: () => void) {
     setBusy(true);
@@ -200,6 +254,9 @@ export function RosterBoard({
     } finally {
       setBusy(false);
     }
+  }
+  async function workforceMutate(action:string,values:Record<string,string>){
+    setBusy(true);setMessage("");try{const response=await fetch("/api/workforce",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({organisationId,action,values})});const result=await response.json() as {message?:string};if(!response.ok)throw new Error(tx("De urenactie kon niet worden opgeslagen.","The hours action could not be saved."));setMessage(result.message??tx("Opgeslagen.","Saved."));router.refresh()}catch(error){setMessage(error instanceof Error?error.message:tx("Opslaan mislukt.","Save failed."))}finally{setBusy(false)}
   }
   const shiftValues = (row: Shift) => ({
     venueId: row.venue_id,
@@ -287,8 +344,8 @@ export function RosterBoard({
               }
               void mutate("proposal", {
                 venueId,
-                startsAt: isoLocal(weekStart),
-                endsAt: isoLocal(weekEnd),
+                startsAt: weekStart.toISOString(),
+                endsAt: weekEnd.toISOString(),
               });
             }}
           >
@@ -300,8 +357,8 @@ export function RosterBoard({
             onClick={() =>
               void mutate("publish", {
                 venueId,
-                startsAt: isoLocal(weekStart),
-                endsAt: isoLocal(weekEnd),
+                startsAt: weekStart.toISOString(),
+                endsAt: weekEnd.toISOString(),
                 expectedRevision: String(
                   Math.max(
                     ...visibleShifts
@@ -359,8 +416,8 @@ export function RosterBoard({
           onClick={() =>
             void mutate("copy_week", {
               venueId,
-              startsAt: isoLocal(new Date(weekStart.getTime() - 7 * dayMs)),
-              endsAt: isoLocal(weekStart),
+              startsAt: new Date(weekStart.getTime() - 7 * dayMs).toISOString(),
+              endsAt: weekStart.toISOString(),
               idempotencyKey: crypto.randomUUID(),
             })
           }
@@ -397,6 +454,24 @@ export function RosterBoard({
           <small>{tx("toewijzing nodig", "need assignment")}</small>
         </article>
       </section>
+      {(sicknessCases.length||coverageIntervals.some(row=>row.gap))?<section className="workforce-inbox" aria-label={tx("Beslissingen voor manager","Manager decision inbox")}><header><div><span className="eyebrow">{tx("BESLISSINGEN","DECISIONS")}</span><h3>{tx("Wat nu aandacht nodig heeft","What needs attention now")}</h3></div><b>{sicknessCases.length+coverageIntervals.filter(row=>row.gap).length}</b></header>{sicknessCases.map(({absence,shift,replacements})=><article key={`${absence.id}-${shift.id}`}><div><strong>{tx("Ziekte raakt geplande dienst","Sickness affects scheduled shift")}</strong><span>{staff.find(person=>person.id===absence.staff_id)?.full_name} · {new Date(shift.starts_at).toLocaleString(locale==="nl"?"nl-NL":"en-GB",{weekday:"short",hour:"2-digit",minute:"2-digit"})}</span><small>{replacements.length?tx("Vervangers gerangschikt op voorkeur, kosten en uren.","Replacements ranked by preference, cost and hours."):tx("Geen volledig geldige vervanger; bied een open dienst aan.","No fully valid replacement; offer an open shift.")}</small></div>{replacements.slice(0,3).map((candidate,index)=><button type="button" key={candidate.staffId} className={index===0?"primary":"secondary"} disabled={busy} onClick={()=>{const values=shiftValues({...shift,staff_id:candidate.staffId});void mutate("shift_update",values,()=>setShifts(current=>current.map(row=>row.id===shift.id?{...shift,staff_id:candidate.staffId,status:"draft",revision:(shift.revision??1)+1}:row)))}}><b>{staff.find(person=>person.id===candidate.staffId)?.full_name}</b><small>{candidate.preferred?tx("voorkeur","preferred"):tx("beschikbaar","available")} · {candidate.costDifferenceMinor>=0n?"+":"−"}{currency(candidate.costDifferenceMinor<0n?-candidate.costDifferenceMinor:candidate.costDifferenceMinor)}</small></button>)}</article>)}{coverageIntervals.filter(row=>row.gap).slice(0,3).map(row=><button type="button" className="inbox-gap" key={row.id} onClick={()=>{if(venueDepartments[0]){setNewShift({day:new Date(row.startsAt),departmentId:venueDepartments[0].id,staffId:"open"});setPanel("new")}}}><span>{tx("Dekkingsgat","Coverage gap")}</span><b>{row.gap} · {new Date(row.startsAt).toLocaleTimeString(locale==="nl"?"nl-NL":"en-GB",{hour:"2-digit",minute:"2-digit"})}</b><em>→</em></button>)}</section>:null}
+      <section className="roster-intelligence" aria-label={tx("Roosterkwaliteit en vraagdekking", "Roster health and demand coverage")}>
+        <article className="roster-health">
+          <header><div><span className="eyebrow">ROSTER HEALTH</span><h3>{health.publishable?tx("Geen blokkerende regels","No blocking rules"):tx("Actie vereist vóór publicatie","Action required before publishing")}</h3></div><b className={health.publishable?"health-ok":"health-blocked"}>{health.publishable?tx("Publiceerbaar","Publishable"):tx("Geblokkeerd","Blocked")}</b></header>
+          <div className="health-dimensions">{health.dimensions.map(dimension=>{const issues=health.issues.filter(issue=>issue.dimension===dimension);return <button type="button" key={dimension} onClick={()=>{if(issues.some(issue=>issue.code==="UNCOVERED_INTERVALS")&&venueDepartments[0]){setNewShift({day:weekStart,departmentId:venueDepartments[0].id,staffId:"open"});setPanel("new")}}}><span>{dimension}</span><strong>{issues.some(issue=>issue.severity==="blocking")?"!":issues.length?"△":"✓"}</strong><small>{issues.length?`${issues.reduce((sum,issue)=>sum+issue.count,0)} ${tx("punt(en)","issue(s)")}`:tx("in orde","clear")}</small></button>})}</div>
+          {health.issues.length?<ul>{health.issues.slice(0,5).map(issue=><li key={issue.code}><b>{issue.code.replaceAll("_"," ").toLowerCase()}</b><span>{issue.count}</span></li>)}</ul>:<p>{tx("Alle meetbare dimensies zijn binnen de beschikbare evidence in orde.","All measurable dimensions are clear within the available evidence.")}</p>}
+        </article>
+        <article className="what-if">
+          <header><div><span className="eyebrow">WHAT IF?</span><h3>{tx("Test vraag zonder het rooster te wijzigen","Test demand without changing the roster")}</h3></div></header>
+          <div className="scenario-buttons">{[-2000,-1000,0,1000,2000].map(value=><button type="button" className={scenarioBasisPoints===value?"active":""} key={value} onClick={()=>{setScenarioBasisPoints(value);if(value)void mutate("scenario",{venueId,startsAt:weekStart.toISOString(),endsAt:weekEnd.toISOString(),demandChangeBasisPoints:String(value),idempotencyKey:crypto.randomUUID()})}}>{value===0?tx("Basis","Baseline"):`${value>0?"+":""}${value/100}%`}</button>)}</div>
+          <dl><div><dt>{tx("Benodigde medewerkers","Required employees")}</dt><dd>{(scenario??coverageIntervals).reduce((sum,row)=>sum+row.requiredStaff,0)}</dd></div><div><dt>{tx("Nieuwe gaten","Exposed gaps")}</dt><dd>{(scenario??coverageIntervals).reduce((sum,row)=>sum+row.gap,0)}</dd></div><div><dt>{tx("Wijzigt rooster","Changes roster")}</dt><dd>{tx("Nee — voorbeeld","No — preview")}</dd></div></dl>
+        </article>
+      </section>
+      <section className="coverage-layer" aria-label={tx("Vraag en dekking per interval","Demand and coverage by interval")}>
+        <header><div><span className="eyebrow">{tx("VRAAG → DEKKING","DEMAND → COVERAGE")}</span><h3>{tx("Waarom deze bezetting nodig is","Why this staffing is required")}</h3></div><small>{tx("Vraagforecast en vastgelegde diensten; geen AI-score.","Demand forecast and persisted shifts; no AI score.")}</small></header>
+        {coverageIntervals.length?<div className="coverage-table" role="table"><div className="coverage-row coverage-heading" role="row"><span>{tx("Interval","Interval")}</span><span>{tx("Vraag","Demand")}</span><span>{tx("Nodig","Required")}</span><span>{tx("Gepland","Planned")}</span><span>{tx("Verschil","Difference")}</span><span>{tx("Kosten","Cost")}</span></div>{coverageIntervals.map(row=><button type="button" className={`coverage-row ${row.gap?"has-gap":row.overstaffing?"overstaffed":"covered"}`} role="row" key={row.id} onClick={()=>{if(row.gap&&venueDepartments[0]){setNewShift({day:new Date(row.startsAt),departmentId:venueDepartments[0].id,staffId:"open"});setPanel("new")}}}><span>{new Date(row.startsAt).toLocaleString(locale==="nl"?"nl-NL":"en-GB",{weekday:"short",hour:"2-digit",minute:"2-digit"})}</span><span>{visibleIntervals.find(interval=>interval.id===row.id)?.expected_guests??"—"}</span><span>{row.requiredStaff}</span><span>{row.plannedStaff}</span><strong>{row.gap?`−${row.gap}`:row.overstaffing?`+${row.overstaffing}`:"✓"}</strong><span>{currency(row.plannedCostMinor)}</span></button>)}</div>:<p className="quiet">{tx("Nog geen vastgelegde vraagintervallen. Maak eerst een serviceforecast.","No persisted demand intervals yet. Create a service forecast first.")}</p>}
+      </section>
+      <section className="staffing-command" aria-label={tx("Live bezetting en uren","Live staffing and hours")}><article><span className="eyebrow">{tx("LIVE BEZETTING","LIVE STAFFING")}</span><h3>{tx("Alleen actuele afwijkingen en beslissingen","Only current deviations and decisions")}</h3><div className="command-kpis"><div><b>{venueRecords.filter(record=>record.status==="open").length}</b><span>{tx("ingeklokt","clocked in")}</span></div><div><b>{pendingRecords.length}</b><span>{tx("uren te beoordelen","hours awaiting approval")}</span></div><div><b>{approvedMinutes}</b><span>{tx("goedgekeurde minuten","approved minutes")}</span></div><div><b>{currency(actualLabor)}</b><span>{tx("werkelijke loonkosten","actual labor")}</span></div></div></article><article><span className="eyebrow">{tx("URENCONTROLE","HOURS REVIEW")}</span><h3>{tx("Goedkeuren behoudt de oorspronkelijke tijdgebeurtenissen","Approval preserves original time events")}</h3>{pendingRecords.length?<div className="hours-list">{pendingRecords.slice(0,8).map(record=>{const person=staff.find(row=>row.id===record.staff_id);const minutes=Math.max(0,Math.floor((new Date(record.clocked_out_at!).getTime()-new Date(record.clocked_in_at).getTime())/60000)-record.break_minutes);return <div key={record.id}><span><b>{person?.full_name}</b><small>{minutes} min · {record.break_minutes} min {tx("pauze","break")}</small></span><button type="button" className="primary" disabled={busy} onClick={()=>void workforceMutate("approve_time",{timeRecordId:record.id,correctionReason:""})}>{tx("Uren goedkeuren","Approve hours")}</button></div>})}</div>:<p className="quiet">{tx("Geen ingediende uren wachten op goedkeuring.","No submitted hours await approval.")}</p>}</article></section>
       {message ? (
         <div className="roster-message" role="status">
           {message}
@@ -659,6 +734,8 @@ export function RosterBoard({
                   );
                 }}
                 resize={(minutes) => resize(selected, minutes)}
+                duplicate={() => void mutate("shift_duplicate",{venueId:selected.venue_id,shiftId:selected.id,idempotencyKey:crypto.randomUUID()},()=>router.refresh())}
+                toggleLock={() => void mutate("shift_lock",{venueId:selected.venue_id,shiftId:selected.id,locked:String(!selected.locked),expectedRevision:String(selected.revision??1)},()=>{setShifts(current=>current.map(item=>item.id===selected.id?{...selected,locked:!selected.locked,revision:(selected.revision??1)+1}:item));setSelected(current=>current?{...current,locked:!current.locked,revision:(current.revision??1)+1}:current)})}
                 cancel={() =>
                   void mutate(
                     "shift_cancel",
@@ -831,6 +908,8 @@ function ShiftEditor({
   toLocal,
   save,
   resize,
+  duplicate,
+  toggleLock,
   cancel,
 }: {
   row: Shift;
@@ -842,6 +921,8 @@ function ShiftEditor({
   toLocal: (value: string) => string;
   save: (values: Record<string, string>) => void;
   resize: (minutes: number) => void;
+  duplicate: () => void;
+  toggleLock: () => void;
   cancel: () => void;
 }) {
   const tx = (nl: string, en: string) => (locale === "nl" ? nl : en);
@@ -918,14 +999,15 @@ function ShiftEditor({
         />
       </label>
       <div className="resize-actions">
-        <button type="button" onClick={() => resize(-30)}>
+        <button type="button" disabled={busy||row.locked} onClick={() => resize(-30)}>
           −30m
         </button>
-        <button type="button" onClick={() => resize(30)}>
+        <button type="button" disabled={busy||row.locked} onClick={() => resize(30)}>
           +30m
         </button>
       </div>
-      <button className="primary" disabled={busy}>
+      <div className="resize-actions"><button type="button" disabled={busy} onClick={duplicate}>{tx("Dupliceer als open dienst","Duplicate as open shift")}</button><button type="button" disabled={busy} onClick={toggleLock}>{row.locked?tx("Ontgrendel","Unlock"):tx("Vergrendel","Lock")}</button></div>
+      <button className="primary" disabled={busy||row.locked}>
         {tx("Opslaan", "Save")}
       </button>
       <button className="danger" type="button" disabled={busy} onClick={cancel}>

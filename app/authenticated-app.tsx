@@ -937,6 +937,9 @@ async function planning(
     { data: requestData },
     { data: recipientData },
     { data: absenceData },
+    { data: staffAvailabilityData },
+    { data: qualificationData },
+    { data: timeRecordData },
   ] = await Promise.all([
     supabase
       .from("departments")
@@ -952,7 +955,7 @@ async function planning(
       .order("name"),
     supabase
       .from("staff_profiles")
-      .select("id,full_name,role_name,onboarding_status,contact_email")
+      .select("id,full_name,role_name,onboarding_status,contact_email,effective_hourly_cost_minor,contracted_minutes_week,maximum_minutes_week,preferences")
       .eq("organisation_id", organisationId)
       .order("full_name"),
     supabase
@@ -966,7 +969,7 @@ async function planning(
     supabase
       .from("shifts")
       .select(
-        "id,venue_id,department_id,role_id,staff_id,starts_at,ends_at,break_minutes,hourly_cost_minor,status,revision",
+        "id,venue_id,department_id,role_id,staff_id,starts_at,ends_at,break_minutes,hourly_cost_minor,status,revision,locked",
       )
       .eq("organisation_id", organisationId)
       .order("starts_at", { ascending: false })
@@ -996,6 +999,22 @@ async function planning(
       .eq("organisation_id", organisationId)
       .order("starts_at", { ascending: false })
       .limit(200),
+    supabase
+      .from("staff_availability")
+      .select("staff_id,venue_id,starts_at,ends_at,availability,submitted_at,source")
+      .eq("organisation_id", organisationId)
+      .order("starts_at", { ascending: false })
+      .limit(500),
+    supabase
+      .from("staff_role_qualifications")
+      .select("staff_id,role_id,qualified_until")
+      .eq("organisation_id", organisationId),
+    supabase
+      .from("time_records")
+      .select("id,venue_id,staff_id,shift_id,clocked_in_at,clocked_out_at,break_minutes,status,approved_at")
+      .eq("organisation_id", organisationId)
+      .order("clocked_in_at", { ascending: false })
+      .limit(200),
   ]);
   const departments = (departmentData ?? []) as unknown as {
     id: string;
@@ -1016,6 +1035,10 @@ async function planning(
     role_name: string;
     onboarding_status: string;
     contact_email: string | null;
+    effective_hourly_cost_minor: string | null;
+    contracted_minutes_week: number | null;
+    maximum_minutes_week: number | null;
+    preferences: Record<string,unknown>;
   }[];
   const intervals = (intervalData ?? []) as unknown as {
     id: string;
@@ -1038,6 +1061,7 @@ async function planning(
     hourly_cost_minor: string;
     status: string;
     revision: number;
+    locked: boolean;
   }[];
   const proposals = (proposalData ?? []) as unknown as {id:string;venue_id:string;objective:string;status:string;result_summary:{coverage_basis_points:number;unfilled_assignments:number;total_planned_minutes:number;planned_cost_minor:string;preferred_assignments:number;missing_evidence:string[]};created_at:string;approval_status:string;rationale:string;confidence_basis:string;execution_status:string;missing_data:string[]}[];
   const requests = (requestData ?? []) as unknown as {
@@ -1067,6 +1091,9 @@ async function planning(
     status: string;
     note: string | null;
   }[];
+  const staffAvailability = (staffAvailabilityData ?? []) as unknown as {staff_id:string;venue_id:string;starts_at:string;ends_at:string;availability:"available"|"preferred"|"preferably_not"|"unavailable";submitted_at:string|null;source:string}[];
+  const qualifications = (qualificationData ?? []) as unknown as {staff_id:string;role_id:string;qualified_until:string|null}[];
+  const timeRecords = (timeRecordData ?? []) as unknown as {id:string;venue_id:string;staff_id:string;shift_id:string|null;clocked_in_at:string;clocked_out_at:string|null;break_minutes:number;status:string;approved_at:string|null}[];
   const departmentOptions = departments.map((row) => ({
     label: row.name,
     value: row.id,
@@ -1089,6 +1116,9 @@ async function planning(
       intervals={intervals}
       initialShifts={shifts}
       absences={absences}
+      staffAvailability={staffAvailability}
+      qualifications={qualifications}
+      timeRecords={timeRecords}
       proposals={proposals}
     />
   );

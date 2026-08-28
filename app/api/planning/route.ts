@@ -6,11 +6,12 @@ import {requiredStaff} from "../../../lib/operations/planning";
 import {assertSameOrigin,securityErrorResponse} from "../../../lib/http/security";
 import {rankSchedulingCandidates,type RosterObjective,type AvailabilityState} from "../../../lib/workforce/maestro";
 import {normalizeDutchPhone} from "../../../lib/workforce/domain";
+import {calculateCoverage,simulateDemand} from "../../../lib/workforce/decision-support";
 
 const envelope=z.object({
   organisationId:z.string().uuid(),
   locale:z.enum(["nl-NL","en-US"]).default("nl-NL"),
-  action:z.enum(["department","role","forecast","shift","shift_update","shift_cancel","copy_week","staff","staff_deactivate","absence","absence_decide","publish","availability","proposal","proposal_apply","resolve_action"]),
+  action:z.enum(["department","role","forecast","shift","shift_update","shift_cancel","shift_duplicate","shift_lock","copy_week","staff","staff_deactivate","absence","absence_decide","publish","availability","proposal","proposal_apply","scenario","resolve_action"]),
   values:z.record(z.string(),z.string()),
 });
 const departmentSchema=z.object({venueId:z.string().uuid(),name:z.string().trim().min(2).max(100)});
@@ -19,6 +20,8 @@ const forecastSchema=z.object({venueId:z.string().uuid(),tradingDate:z.iso.date(
 const shiftSchema=z.object({venueId:z.string().uuid(),departmentId:z.string().uuid(),roleId:z.string().uuid(),staffId:z.union([z.string().uuid(),z.literal("open")]),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),breakMinutes:z.coerce.number().int().min(0).max(480),hourlyCost:z.string()});
 const shiftUpdateSchema=shiftSchema.extend({shiftId:z.string().uuid(),expectedRevision:z.coerce.number().int().positive().default(1)});
 const shiftCancelSchema=z.object({venueId:z.string().uuid(),shiftId:z.string().uuid()});
+const shiftLockSchema=z.object({venueId:z.string().uuid(),shiftId:z.string().uuid(),locked:z.enum(["true","false"]),expectedRevision:z.coerce.number().int().positive()});
+const shiftDuplicateSchema=z.object({venueId:z.string().uuid(),shiftId:z.string().uuid(),idempotencyKey:z.string().uuid()});
 const copyWeekSchema=z.object({venueId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),idempotencyKey:z.string().uuid()});
 const staffSchema=z.object({venueId:z.string().uuid(),fullName:z.string().trim().min(2).max(140),email:z.union([z.literal(""),z.email()]),phone:z.string().trim().max(40),roleName:z.string().trim().min(2).max(100),engagementType:z.enum(["employee","contractor","temporary"]),preferredLanguage:z.enum(["nl","en"])});
 const staffDeactivateSchema=z.object({staffId:z.string().uuid()});
@@ -28,6 +31,7 @@ const publishSchema=z.object({venueId:z.string().uuid(),startsAt:z.iso.datetime(
 const availabilitySchema=z.object({venueId:z.string().uuid(),staffId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),availability:z.enum(["available","preferred","unavailable"]),note:z.string().trim().max(500).default("")});
 const proposalSchema=z.object({venueId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true})});
 const proposalApplySchema=z.object({venueId:z.string().uuid(),proposalId:z.string().uuid()});
+const scenarioSchema=z.object({venueId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),demandChangeBasisPoints:z.coerce.number().int().min(-10000).max(100000),idempotencyKey:z.string().uuid()});
 const resolveSchema=z.object({actionId:z.string().uuid(),resolution:z.string().trim().min(5).max(2000)});
 const iso=(value:string)=>new Date(value).toISOString();
 
@@ -91,6 +95,18 @@ export async function POST(request:Request){
       const {data,error}=await supabase.from("shifts").update({status:"cancelled",updated_at:new Date().toISOString()}).eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).eq("id",values.shiftId).select("id").single();
       if(error||!data)throw error??new Error("SHIFT_NOT_FOUND");
       return NextResponse.json({message:"Dienst verwijderd uit het conceptrooster."});
+    }
+    if(input.action==="shift_lock"){
+      const values=shiftLockSchema.parse(input.values);const {supabase}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
+      const {data,error}=await supabase.from("shifts").update({locked:values.locked==="true",revision:values.expectedRevision+1,updated_at:new Date().toISOString()}).eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).eq("id",values.shiftId).eq("revision",values.expectedRevision).select("id").single();if(error||!data)throw error??new Error("CONCURRENT_SHIFT_EDIT");
+      return NextResponse.json({message:values.locked==="true"?"Dienst vergrendeld tegen roosterwijzigingen.":"Dienst ontgrendeld."});
+    }
+    if(input.action==="shift_duplicate"){
+      const values=shiftDuplicateSchema.parse(input.values);const {supabase,user}=await requireMembership(input.organisationId,"planning.manage",values.venueId);const receipt=`shift-duplicate:${input.organisationId}:${values.idempotencyKey}`;
+      const jobs=supabase.from("job_runs") as unknown as {insert:(value:Record<string,unknown>)=>Promise<{error:{code?:string}|null}>;update:(value:Record<string,unknown>)=>{eq:(column:string,value:string)=>Promise<unknown>}};const {error:receiptError}=await jobs.insert({organisation_id:input.organisationId,venue_id:values.venueId,job_type:"shift_duplicate",idempotency_key:receipt,status:"started",started_at:new Date().toISOString()});if(receiptError?.code==="23505")return NextResponse.json({message:"Deze duplicatie was al verwerkt.",replayed:true});if(receiptError)throw receiptError;
+      const {data:source,error:sourceError}=await supabase.from("shifts").select("department_id,role_id,starts_at,ends_at,break_minutes,hourly_cost_minor").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).eq("id",values.shiftId).single();if(sourceError||!source)throw sourceError??new Error("SHIFT_NOT_FOUND");
+      const row=source as unknown as {department_id:string;role_id:string;starts_at:string;ends_at:string;break_minutes:number;hourly_cost_minor:string};const {error}=await supabase.from("shifts").insert({...row,organisation_id:input.organisationId,venue_id:values.venueId,staff_id:null,status:"draft",source:"manager",created_by:user.id});if(error)throw error;await jobs.update({status:"succeeded",finished_at:new Date().toISOString()}).eq("idempotency_key",receipt);
+      return NextResponse.json({message:"Dienst als open concept gedupliceerd."},{status:201});
     }
     if(input.action==="copy_week"){
       const values=copyWeekSchema.parse(input.values);
@@ -174,9 +190,9 @@ export async function POST(request:Request){
       const windowStart=iso(values.startsAt),windowEnd=iso(values.endsAt);if(new Date(windowEnd)<=new Date(windowStart))throw new Error("INVALID_WINDOW");
       const [{data:intervals},{data:shifts},{data:roleData},{data:staffData},{data:assignmentData},{data:qualificationData},{data:availabilityData},{data:absenceData}]=await Promise.all([
         supabase.from("demand_forecast_intervals").select("expected_guests,expected_revenue_minor,required_staff,starts_at,ends_at").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).gte("starts_at",windowStart).lt("starts_at",windowEnd).order("starts_at"),
-        supabase.from("shifts").select("staff_id,starts_at,ends_at,status").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).lt("starts_at",windowEnd).gt("ends_at",windowStart).not("status","in","(cancelled,rejected)"),
+        supabase.from("shifts").select("staff_id,starts_at,ends_at,status,locked").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).lt("starts_at",new Date(new Date(windowEnd).getTime()+11*3600000).toISOString()).gt("ends_at",new Date(new Date(windowStart).getTime()-11*3600000).toISOString()).not("status","in","(cancelled,rejected)"),
         supabase.from("operational_roles").select("id,department_id,hourly_cost_minor,minimum_staff,guests_per_staff").eq("organisation_id",input.organisationId).eq("active",true),
-        supabase.from("staff_profiles").select("id,effective_hourly_cost_minor,contracted_minutes_week,employment_status,onboarding_status").eq("organisation_id",input.organisationId),
+        supabase.from("staff_profiles").select("id,effective_hourly_cost_minor,contracted_minutes_week,maximum_minutes_week,employment_status,onboarding_status").eq("organisation_id",input.organisationId),
         supabase.from("staff_venue_assignments").select("staff_id").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId),
         supabase.from("staff_role_qualifications").select("staff_id,role_id,qualified_until").eq("organisation_id",input.organisationId),
         supabase.from("staff_availability").select("staff_id,starts_at,ends_at,availability").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).lt("starts_at",windowEnd).gt("ends_at",windowStart),
@@ -185,12 +201,12 @@ export async function POST(request:Request){
       const intervalRows=(intervals??[]) as unknown as {expected_guests:number;expected_revenue_minor:string;required_staff:number;starts_at:string;ends_at:string}[];
       if(!intervalRows.length)throw new Error("FORECAST_REQUIRED");
       const roleRows=(roleData??[]) as unknown as {id:string;department_id:string;hourly_cost_minor:string;minimum_staff:number;guests_per_staff:number}[];if(!roleRows.length)throw new Error("ROLES_REQUIRED");
-      const staffRows=(staffData??[]) as unknown as {id:string;effective_hourly_cost_minor:string|null;contracted_minutes_week:number|null;employment_status:string;onboarding_status:string}[];
+      const staffRows=(staffData??[]) as unknown as {id:string;effective_hourly_cost_minor:string|null;contracted_minutes_week:number|null;maximum_minutes_week:number|null;employment_status:string;onboarding_status:string}[];
       const assigned=new Set(((assignmentData??[]) as unknown as {staff_id:string}[]).map(row=>row.staff_id));
       const qualifications=(qualificationData??[]) as unknown as {staff_id:string;role_id:string;qualified_until:string|null}[];
       const availability=(availabilityData??[]) as unknown as {staff_id:string;starts_at:string;ends_at:string;availability:AvailabilityState}[];
       const absences=(absenceData??[]) as unknown as {staff_id:string;starts_at:string;ends_at:string}[];
-      const existing=(shifts??[]) as unknown as {staff_id:string|null;starts_at:string;ends_at:string}[];
+      const existing=(shifts??[]) as unknown as {staff_id:string|null;starts_at:string;ends_at:string;locked:boolean}[];
       const objectives:RosterObjective[]=["balanced","lowest_cost","preference"];
       const inputSnapshot={window_start:windowStart,window_end:windowEnd,intervals:intervalRows,role_ids:roleRows.map(row=>row.id),staff_ids:staffRows.map(row=>row.id)};
       const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify(inputSnapshot))),inputHash=Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,"0")).join("");
@@ -198,7 +214,7 @@ export async function POST(request:Request){
         const shiftPlan:Record<string,unknown>[]=[],plannedMinutes=new Map<string,number>();let unfilled=0,totalRequired=0,totalCost=0n,preferredAssignments=0;
         for(const interval of intervalRows){const intervalStart=new Date(interval.starts_at),intervalEnd=new Date(interval.ends_at),minutes=Math.floor((intervalEnd.getTime()-intervalStart.getTime())/60000),used=new Set<string>();
           for(const role of roleRows){const required=Math.max(role.minimum_staff,Math.ceil(interval.expected_guests/role.guests_per_staff));totalRequired+=required;
-            const candidates=staffRows.map(staff=>{const window=availability.find(row=>row.staff_id===staff.id&&new Date(row.starts_at)<=intervalStart&&new Date(row.ends_at)>=intervalEnd),state=window?.availability??"unknown";const qualified=qualifications.some(row=>row.staff_id===staff.id&&row.role_id===role.id&&(!row.qualified_until||row.qualified_until>=interval.starts_at.slice(0,10)));const absent=absences.some(row=>row.staff_id===staff.id&&new Date(row.starts_at)<intervalEnd&&new Date(row.ends_at)>intervalStart);const occupied=existing.some(row=>row.staff_id===staff.id&&new Date(row.starts_at)<intervalEnd&&new Date(row.ends_at)>intervalStart)||used.has(staff.id);return{staffId:staff.id,hourlyCostMinor:BigInt(staff.effective_hourly_cost_minor??role.hourly_cost_minor),contractedMinutes:staff.contracted_minutes_week??0,alreadyPlannedMinutes:plannedMinutes.get(staff.id)??0,availability:state,eligible:assigned.has(staff.id)&&staff.onboarding_status!=="suspended"&&staff.employment_status!=="deactivated"&&qualified&&!absent&&!occupied}});
+            const candidates=staffRows.map(staff=>{const window=availability.find(row=>row.staff_id===staff.id&&new Date(row.starts_at)<=intervalStart&&new Date(row.ends_at)>=intervalEnd),state=window?.availability??"unknown";const qualified=qualifications.some(row=>row.staff_id===staff.id&&row.role_id===role.id&&(!row.qualified_until||row.qualified_until>=interval.starts_at.slice(0,10)));const absent=absences.some(row=>row.staff_id===staff.id&&new Date(row.starts_at)<intervalEnd&&new Date(row.ends_at)>intervalStart);const staffShifts=existing.filter(row=>row.staff_id===staff.id);const occupied=staffShifts.some(row=>new Date(row.starts_at)<intervalEnd&&new Date(row.ends_at)>intervalStart)||used.has(staff.id);const restConflict=staffShifts.some(row=>{const start=new Date(row.starts_at).getTime(),end=new Date(row.ends_at).getTime();return end<=intervalStart.getTime()&&intervalStart.getTime()-end<11*3600000||start>=intervalEnd.getTime()&&start-intervalEnd.getTime()<11*3600000});const projected=(plannedMinutes.get(staff.id)??0)+minutes;const hoursAllowed=staff.maximum_minutes_week===null||projected<=staff.maximum_minutes_week;return{staffId:staff.id,hourlyCostMinor:BigInt(staff.effective_hourly_cost_minor??role.hourly_cost_minor),contractedMinutes:staff.contracted_minutes_week??0,alreadyPlannedMinutes:plannedMinutes.get(staff.id)??0,availability:state,eligible:assigned.has(staff.id)&&staff.onboarding_status!=="suspended"&&staff.employment_status!=="deactivated"&&qualified&&!absent&&!occupied&&!restConflict&&hoursAllowed}});
             const ranked=rankSchedulingCandidates(candidates,objective);
             for(let index=0;index<required;index++){const chosen=ranked[index];if(chosen){used.add(chosen.staffId);plannedMinutes.set(chosen.staffId,(plannedMinutes.get(chosen.staffId)??0)+minutes);totalCost+=(BigInt(minutes)*chosen.hourlyCostMinor+30n)/60n;if(chosen.availability==="preferred")preferredAssignments+=1} else unfilled+=1;shiftPlan.push({department_id:role.department_id,role_id:role.id,staff_id:chosen?.staffId??null,starts_at:interval.starts_at,ends_at:interval.ends_at,break_minutes:0,hourly_cost_minor:String(chosen?.hourlyCostMinor??BigInt(role.hourly_cost_minor))})}
           }
@@ -213,6 +229,17 @@ export async function POST(request:Request){
       const values=proposalApplySchema.parse(input.values);const {supabase}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
       const {data,error}=await supabase.rpc("apply_roster_proposal" as "clock_out",{target_organisation_id:input.organisationId,target_proposal_id:values.proposalId} as never);if(error)throw error;
       return NextResponse.json({message:`Roosteroptie toegepast als bewerkbaar concept (${(data as unknown as {created?:number})?.created??0} diensten).`});
+    }
+    if(input.action==="scenario"){
+      const values=scenarioSchema.parse(input.values);const {supabase,user}=await requireMembership(input.organisationId,"planning.manage",values.venueId);const windowStart=iso(values.startsAt),windowEnd=iso(values.endsAt);
+      const [{data:intervalData,error:intervalError},{data:shiftData,error:shiftError}]=await Promise.all([
+        supabase.from("demand_forecast_intervals").select("id,starts_at,ends_at,required_staff,expected_revenue_minor").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).gte("starts_at",windowStart).lt("starts_at",windowEnd),
+        supabase.from("shifts").select("id,starts_at,ends_at,staff_id,hourly_cost_minor,break_minutes").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).lt("starts_at",windowEnd).gt("ends_at",windowStart).not("status","in","(cancelled,rejected)"),
+      ]);if(intervalError||shiftError)throw intervalError??shiftError;
+      const coverage=calculateCoverage(((intervalData??[]) as unknown as {id:string;starts_at:string;ends_at:string;required_staff:number;expected_revenue_minor:string}[]).map(row=>({id:row.id,startsAt:row.starts_at,endsAt:row.ends_at,roleId:"all",requiredStaff:row.required_staff,expectedRevenueMinor:BigInt(row.expected_revenue_minor)})),((shiftData??[]) as unknown as {id:string;starts_at:string;ends_at:string;staff_id:string|null;hourly_cost_minor:string;break_minutes:number}[]).map(row=>({id:row.id,startsAt:row.starts_at,endsAt:row.ends_at,roleId:"all",staffId:row.staff_id,hourlyCostMinor:BigInt(row.hourly_cost_minor),breakMinutes:row.break_minutes})));
+      const result=simulateDemand(coverage,values.demandChangeBasisPoints).map(row=>({...row,expectedRevenueMinor:String(row.expectedRevenueMinor)}));
+      const {data,error}=await supabase.from("workforce_scenarios" as "shifts").insert({organisation_id:input.organisationId,venue_id:values.venueId,window_start:windowStart,window_end:windowEnd,scenario_type:"demand_change",inputs:{demand_change_basis_points:values.demandChangeBasisPoints},result,status:"draft",idempotency_key:values.idempotencyKey,created_by:user.id} as never).select("id").single();if(error)throw error;
+      return NextResponse.json({message:"What-if-scenario als niet-toegepast concept opgeslagen.",scenarioId:data.id,result},{status:201});
     }
     const values=resolveSchema.parse(input.values);
     const {supabase,user}=await requireMembership(input.organisationId,"actions.manage");

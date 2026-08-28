@@ -89,6 +89,17 @@ export function AvailabilityResponse({
       note: previous.note,
     });
   };
+  const applyFirstAnsweredToUnresolved = () => {
+    const source = entries.find((entry) => entry.availability !== "unknown");
+    if (!source) return;
+    setEntries((current) => current.map((entry) => {
+      if (entry.availability !== "unknown") return entry;
+      const start = `${entry.day}${source.startsAt.slice(10)}`;
+      const duration = new Date(zonedInputToUtc(source.endsAt, venueTimezone)).getTime() - new Date(zonedInputToUtc(source.startsAt, venueTimezone)).getTime();
+      const end = utcToZonedInput(new Date(new Date(zonedInputToUtc(start, venueTimezone)).getTime()+duration).toISOString(),venueTimezone);
+      return {...entry,availability:source.availability,startsAt:start,endsAt:end,note:source.note};
+    }));
+  };
   async function save(final: boolean) {
     const known = entries.filter((entry) => entry.availability !== "unknown");
     if (final && known.length !== entries.length) {
@@ -176,7 +187,7 @@ export function AvailabilityResponse({
           })}
         </p>
         {!review ? (
-          <div className="availability-days">
+          <><div className="availability-quick-actions" aria-label={tx("Snelle invoer","Quick entry")}><b>{entries.filter(entry=>entry.availability==="unknown").length} {tx("dagen open","days unresolved")}</b><button type="button" onClick={()=>setEntries(current=>current.map(entry=>({...entry,availability:"available"})))}>{tx("Beschikbaar tijdens alle openingstijden","Available for all opening hours")}</button><button type="button" disabled={!entries.some(entry=>entry.availability!=="unknown")} onClick={applyFirstAnsweredToUnresolved}>{tx("Pas eerste antwoord toe op open dagen","Apply first answer to unresolved days")}</button><button type="button" onClick={()=>setEntries(current=>current.map(entry=>({...entry,availability:"unavailable"})))}>{tx("Alles niet beschikbaar","Mark all unavailable")}</button></div><div className="availability-days">
             {entries.map((entry, index) => (
               <fieldset key={entry.day}>
                 <legend>
@@ -239,7 +250,7 @@ export function AvailabilityResponse({
                 ) : null}
               </fieldset>
             ))}
-          </div>
+          </div></>
         ) : (
           <div className="availability-review">
             {entries.map((entry) => (
