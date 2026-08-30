@@ -1,0 +1,39 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import { requireMembership } from "../../../../lib/auth/require-membership";
+import { assertSameOrigin, securityErrorResponse } from "../../../../lib/http/security";
+import { priceFor, stripeClient } from "../../../../lib/stripe/server";
+
+const schema = z.object({ organisationId: z.uuid(), plan: z.enum(["diagnostic", "essential_monthly", "essential_annual", "pro_monthly", "pro_annual"]), venueQuantity: z.number().int().min(1).max(100).default(1) });
+
+export async function POST(request: Request) {
+  try {
+    assertSameOrigin(request);
+    const input = schema.parse(await request.json());
+    const { supabase } = await requireMembership(input.organisationId, "billing.manage");
+    const [{ data: org }, { count: venueCount, error: venueError }] = await Promise.all([
+      supabase.from("organisations").select("name,stripe_customer_id").eq("id", input.organisationId).single(),
+      supabase.from("venues").select("id", { count: "exact", head: true }).eq("organisation_id", input.organisationId),
+    ]);
+    if (!org) throw new Error("FORBIDDEN");
+    if (venueError || !venueCount) throw new Error("NO_VENUES");
+    const recurring = input.plan !== "diagnostic";
+    if (recurring && input.venueQuantity !== venueCount) throw new Error("VENUE_QUANTITY_MISMATCH");
+    const stripe = stripeClient();
+    let customer = org.stripe_customer_id;
+    if (!customer) {
+      const created = await stripe.customers.create({ name: org.name, metadata: { organisation_id: input.organisationId } }, { idempotencyKey: `org-customer-${input.organisationId}` });
+      customer = created.id;
+      await supabase.from("organisations").update({ stripe_customer_id: customer }).eq("id", input.organisationId);
+    }
+    const origin = new URL(request.url).origin;
+    const quantity = recurring ? venueCount : 1;
+    const session = await stripe.checkout.sessions.create({ mode: recurring ? "subscription" : "payment", customer, line_items: [{ price: priceFor(input.plan), quantity }], success_url: `${origin}/app/settings/billing?checkout=success`, cancel_url: `${origin}/app/settings/billing?checkout=cancelled`, client_reference_id: input.organisationId, metadata: { organisation_id: input.organisationId, plan: input.plan, venue_quantity: String(quantity) }, subscription_data: recurring ? { metadata: { organisation_id: input.organisationId, plan: input.plan, venue_quantity: String(quantity) } } : undefined }, { idempotencyKey: `checkout-${input.organisationId}-${input.plan}-${quantity}-${Math.floor(Date.now() / 300000)}` });
+    return NextResponse.json({ url: session.url });
+  } catch (error) {
+    const security = securityErrorResponse(error);
+    if (security) return security;
+    const code = error instanceof Error ? error.message : "UNKNOWN";
+    return NextResponse.json({ errorCode: code === "FORBIDDEN" ? "FORBIDDEN" : "CHECKOUT_FAILED" }, { status: code === "FORBIDDEN" ? 403 : 400 });
+  }
+}
