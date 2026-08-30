@@ -943,6 +943,7 @@ async function planning(
     { data: breakPlanData },
     { data: rosterTemplateData },
     { data: managerSwapData },
+    { data: timeCorrectionData },
   ] = await Promise.all([
     supabase
       .from("departments")
@@ -1021,6 +1022,7 @@ async function planning(
     supabase.from("shift_break_plans").select("id,venue_id,shift_id,starts_at,ends_at,status,revision").eq("organisation_id",organisationId).in("status",["planned","adjusted","taken","missed"]).order("starts_at",{ascending:false}).limit(200),
     supabase.from("roster_templates").select("id,venue_id,name,shift_pattern,active").eq("organisation_id",organisationId).eq("active",true).order("name"),
     supabase.from("swap_requests").select("id,venue_id,shift_id,requester_staff_id,candidate_staff_id,state,reason,cost_effect_minor,created_at").eq("organisation_id",organisationId).in("state",["requested","candidate_accepted"]).order("created_at"),
+    supabase.from("time_corrections").select("id,venue_id,time_record_id,reason,original_values,proposed_values,status,created_at").eq("organisation_id",organisationId).eq("status","requested").order("created_at"),
   ]);
   const departments = (departmentData ?? []) as unknown as {
     id: string;
@@ -1108,6 +1110,7 @@ async function planning(
   const breakPlans=(breakPlanData??[]) as unknown as {id:string;venue_id:string;shift_id:string;starts_at:string;ends_at:string;status:string;revision:number}[];
   const rosterTemplates=(rosterTemplateData??[]) as unknown as {id:string;venue_id:string;name:string;shift_pattern:unknown[];active:boolean}[];
   const managerSwaps=(managerSwapData??[]) as unknown as {id:string;venue_id:string;shift_id:string;requester_staff_id:string;candidate_staff_id:string;state:string;reason:string|null;cost_effect_minor:string|null;created_at:string}[];
+  const timeCorrections=(timeCorrectionData??[]) as unknown as {id:string;venue_id:string;time_record_id:string;reason:string;original_values:Record<string,unknown>;proposed_values:Record<string,unknown>;status:string;created_at:string}[];
   const departmentOptions = departments.map((row) => ({
     label: row.name,
     value: row.id,
@@ -1136,6 +1139,7 @@ async function planning(
       breakPlans={breakPlans}
       rosterTemplates={rosterTemplates}
       swaps={managerSwaps}
+      timeCorrections={timeCorrections}
       proposals={proposals}
     />
   );
@@ -1609,6 +1613,8 @@ async function myWork(
   const swaps=(swapData??[]) as unknown as {id:string;venue_id:string;shift_id:string;requester_staff_id:string;candidate_staff_id:string;state:string;reason:string|null;manager_reason:string|null;cost_effect_minor:string|null;created_at:string}[];
   const candidateResults=await Promise.all(shifts.filter(shift=>shift.status==="published").map(async shift=>{const {data}=await supabase.rpc("eligible_swap_candidates" as "clock_out",{target_organisation_id:organisationId,target_shift_id:shift.id} as never);return[shift.id,(data??[]) as unknown as {staff_id:string;full_name:string}[]] as const}));
   const swapCandidates=new Map(candidateResults);
+  const {data:eligibleOfferData}=await supabase.rpc("eligible_open_shift_offers" as "clock_out",{target_organisation_id:organisationId} as never);
+  const eligibleOffers=(eligibleOfferData??[]) as unknown as {offer_id:string;venue_id:string;shift_id:string;starts_at:string;ends_at:string;break_minutes:number;role_name:string;closes_at:string}[];
   const openRecord = records.find((record) => !record.clocked_out_at);
   const next = shifts[0];
   return (
@@ -1635,6 +1641,7 @@ async function myWork(
           title={t("myWork.activeShift")}
           submitLabel={t("myWork.clockOut")}
           fields={[
+            {name:"idempotencyKey",label:"",type:"hidden",defaultValue:crypto.randomUUID()},
             {
               name: "timeRecordId",
               label: t("myWork.timeRecord"),
@@ -1648,7 +1655,7 @@ async function myWork(
               ],
             },
           ]}
-        /><div className="split-workspace"><WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="start_break" title={locale==="nl"?"Pauze":"Break"} submitLabel={locale==="nl"?"Start pauze":"Start break"} fields={[{name:"timeRecordId",label:t("myWork.timeRecord"),type:"select",required:true,options:[{label:t("myWork.activeShift"),value:openRecord.id}]}]}/><WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="end_break" title={locale==="nl"?"Lopende pauze":"Active break"} submitLabel={locale==="nl"?"Beëindig pauze":"End break"} fields={[{name:"timeRecordId",label:t("myWork.timeRecord"),type:"select",required:true,options:[{label:t("myWork.activeShift"),value:openRecord.id}]}]}/></div></div>
+        /><div className="split-workspace"><WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="start_break" title={locale==="nl"?"Pauze":"Break"} submitLabel={locale==="nl"?"Start pauze":"Start break"} fields={[{name:"idempotencyKey",label:"",type:"hidden",defaultValue:crypto.randomUUID()},{name:"timeRecordId",label:t("myWork.timeRecord"),type:"select",required:true,options:[{label:t("myWork.activeShift"),value:openRecord.id}]}]}/><WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="end_break" title={locale==="nl"?"Lopende pauze":"Active break"} submitLabel={locale==="nl"?"Beëindig pauze":"End break"} fields={[{name:"idempotencyKey",label:"",type:"hidden",defaultValue:crypto.randomUUID()},{name:"timeRecordId",label:t("myWork.timeRecord"),type:"select",required:true,options:[{label:t("myWork.activeShift"),value:openRecord.id}]}]}/></div></div>
       ) : next ? (
         <WorkflowForm
           endpoint="/api/workforce"
@@ -1657,6 +1664,7 @@ async function myWork(
           title={t("myWork.attendance")}
           submitLabel={t("myWork.clockIn")}
           fields={[
+            {name:"idempotencyKey",label:"",type:"hidden",defaultValue:crypto.randomUUID()},
             {
               name: "venueId",
               label: t("common.venue"),
@@ -1778,6 +1786,7 @@ async function myWork(
       {shifts.filter(shift=>(swapCandidates.get(shift.id)?.length??0)>0).map(shift=><WorkflowForm key={`swap-${shift.id}`} endpoint="/api/workforce" organisationId={organisationId} workflow="request_swap" title={locale==="nl"?`Ruil dienst ${new Date(shift.starts_at).toLocaleString("nl-NL")}`:`Swap shift ${new Date(shift.starts_at).toLocaleString("en-GB")}`} submitLabel={locale==="nl"?"Ruil voorstellen":"Propose swap"} fields={[{name:"shiftId",label:"",type:"hidden",defaultValue:shift.id},{name:"candidateStaffId",label:locale==="nl"?"Geschikte collega":"Eligible colleague",type:"select",required:true,options:(swapCandidates.get(shift.id)??[]).map(candidate=>({label:candidate.full_name,value:candidate.staff_id}))},{name:"reason",label:locale==="nl"?"Reden":"Reason",type:"textarea",required:true},{name:"idempotencyKey",label:"",type:"hidden",defaultValue:crypto.randomUUID()}]}/>)}
       {swaps.filter(swap=>swap.candidate_staff_id===staff.id&&swap.state==="requested").map(swap=><section className="panel" key={swap.id}><h3>{locale==="nl"?"Ruilverzoek van collega":"Colleague swap request"}</h3><p>{swap.reason}</p><div className="split-workspace"><WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="respond_swap" title={locale==="nl"?"Instemmen":"Accept"} submitLabel={locale==="nl"?"Instemmen":"Accept"} fields={[{name:"swapId",label:"",type:"hidden",defaultValue:swap.id},{name:"decision",label:"",type:"hidden",defaultValue:"accept"}]}/><WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="respond_swap" title={locale==="nl"?"Afwijzen":"Decline"} submitLabel={locale==="nl"?"Afwijzen":"Decline"} fields={[{name:"swapId",label:"",type:"hidden",defaultValue:swap.id},{name:"decision",label:"",type:"hidden",defaultValue:"decline"}]}/></div></section>)}
       {swaps.length?<RecordPanel title={locale==="nl"?"Mijn ruilverzoeken":"My swap requests"} empty="">{swaps.map(swap=><div className="record-row" key={swap.id}><b>{authEnumLabel(locale,swap.state)}</b><span>{swap.reason??"—"}</span><em>{swap.manager_reason??""}</em></div>)}</RecordPanel>:null}
+      {eligibleOffers.length?<RecordPanel title={locale==="nl"?"Geschikte open diensten":"Eligible open shifts"} empty="">{eligibleOffers.map(offer=><div className="record-row" key={offer.offer_id}><b>{offer.role_name} · {new Date(offer.starts_at).toLocaleString(authIntlLocale(locale))}</b><span>{locale==="nl"?"Je beschikbaarheid, kwalificatie, rust en uren zijn vooraf gecontroleerd.":"Your availability, qualification, rest and hours were pre-checked."}</span><WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="claim_open_shift" title={locale==="nl"?"Open dienst accepteren":"Accept open shift"} submitLabel={locale==="nl"?"Atomair accepteren":"Accept atomically"} fields={[{name:"offerId",label:"",type:"hidden",defaultValue:offer.offer_id},{name:"idempotencyKey",label:"",type:"hidden",defaultValue:crypto.randomUUID()}]}/></div>)}</RecordPanel>:null}
       <div className="split-workspace">
         <WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="request_leave" title={locale==="nl"?"Vrij vragen":"Request leave"} submitLabel={locale==="nl"?"Aanvraag indienen":"Submit request"} fields={[{name:"venueId",label:t("common.venue"),type:"select",required:true,options:venueOptions(venues)},{name:"startsAt",label:locale==="nl"?"Vanaf":"From",type:"datetime-local",required:true},{name:"endsAt",label:locale==="nl"?"Tot":"Until",type:"datetime-local",required:true},{name:"note",label:locale==="nl"?"Notitie (optioneel)":"Note (optional)",type:"textarea"}]}/>
         <WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="report_sickness" title={locale==="nl"?"Ziek melden":"Report sickness"} submitLabel={locale==="nl"?"Veilig melden":"Report securely"} fields={[{name:"venueId",label:t("common.venue"),type:"select",required:true,options:venueOptions(venues)},{name:"startsAt",label:locale==="nl"?"Vanaf":"From",type:"datetime-local",required:true},{name:"endsAt",label:locale==="nl"?"Geschat tot":"Expected until",type:"datetime-local",required:true},{name:"note",label:locale==="nl"?"Korte operationele notitie":"Short operational note",type:"textarea"}]}/>

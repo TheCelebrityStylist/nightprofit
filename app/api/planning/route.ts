@@ -12,7 +12,7 @@ import {createStaffOnboardingToken,hashStaffOnboardingToken,onboardingMessage} f
 const envelope=z.object({
   organisationId:z.string().uuid(),
   locale:z.enum(["nl-NL","en-US"]).default("nl-NL"),
-  action:z.enum(["department","role","forecast","shift","shift_update","shift_cancel","shift_duplicate","shift_lock","shift_bulk","planner_history","template_save","template_apply","break_plan","copy_week","staff","invitation_state","staff_deactivate","absence","absence_decide","swap_decide","publish","availability","proposal","proposal_apply","scenario","resolve_action"]),
+  action:z.enum(["department","role","forecast","shift","shift_update","shift_cancel","shift_duplicate","shift_lock","shift_bulk","planner_history","template_save","template_apply","break_plan","copy_week","staff","invitation_state","staff_deactivate","absence","absence_decide","open_shift_offer","swap_decide","publish","availability","proposal","proposal_apply","scenario","resolve_action"]),
   values:z.record(z.string(),z.string()),
 });
 const departmentSchema=z.object({venueId:z.string().uuid(),name:z.string().trim().min(2).max(100)});
@@ -35,6 +35,7 @@ const invitationStateSchema=z.object({venueId:z.string().uuid(),invitationId:z.s
 const absenceSchema=z.object({venueId:z.string().uuid(),staffId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),absenceType:z.enum(["leave","sickness","other"]),note:z.string().trim().max(500)});
 const absenceDecisionSchema=z.object({venueId:z.string().uuid(),absenceId:z.string().uuid(),decision:z.enum(["approved","rejected"])});
 const swapDecisionSchema=z.object({venueId:z.string().uuid(),swapId:z.string().uuid(),decision:z.enum(["approved","rejected"]),reason:z.string().trim().min(3).max(1000)});
+const openShiftOfferSchema=z.object({venueId:z.string().uuid(),shiftId:z.string().uuid(),closesAt:z.iso.datetime({local:true}),idempotencyKey:z.string().uuid()});
 const publishSchema=z.object({venueId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),expectedRevision:z.coerce.number().int().positive(),idempotencyKey:z.string().uuid()});
 const availabilitySchema=z.object({venueId:z.string().uuid(),staffId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),availability:z.enum(["available","preferred","unavailable"]),note:z.string().trim().max(500).default("")});
 const proposalSchema=z.object({venueId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true})});
@@ -220,6 +221,10 @@ export async function POST(request:Request){
       const values=swapDecisionSchema.parse(input.values);const {supabase}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
       const {data,error}=await supabase.rpc("decide_shift_swap" as "clock_out",{target_organisation_id:input.organisationId,target_swap_id:values.swapId,target_approve:values.decision==="approved",target_reason:values.reason} as never);if(error)throw error;
       return NextResponse.json({message:values.decision==="approved"?"Ruil goedgekeurd en als onveranderlijke opvolgversie gepubliceerd.":"Ruilverzoek afgewezen en geaudit.",result:data});
+    }
+    if(input.action==="open_shift_offer"){
+      const values=openShiftOfferSchema.parse(input.values);const {supabase}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
+      const {data,error}=await supabase.rpc("create_open_shift_offer" as "clock_out",{target_organisation_id:input.organisationId,target_venue_id:values.venueId,target_shift_id:values.shiftId,target_closes_at:iso(values.closesAt),target_idempotency_key:values.idempotencyKey} as never);if(error)throw error;return NextResponse.json({message:"Open dienst aangeboden aan uitsluitend server-side geschikte medewerkers.",offer:data},{status:201});
     }
     if(input.action==="publish"){
       const values=publishSchema.parse(input.values);

@@ -20,9 +20,9 @@ This matrix is source-evidenced at checkpoint `300e673` and is updated as code-c
 | What-if | Partially implemented | Persisted non-authoritative demand scenario exists; other scenario types and apply flow remain. |
 | Immutable publication | Partially implemented | Idempotent, concurrent, immutable successor snapshots and server hard constraints exist; stale evidence, full preview and communication queue remain. |
 | Leave and sickness replacement | Partially implemented | Persistent requests/decisions and ranked replacements exist; split replacement/open-offer/successor communication loop remains. |
-| Open shifts | Partially implemented | Atomic claim RPC exists; manager lifecycle, expiry and successor publication acceptance remain. |
+| Open shifts | Implemented; remote migration and authenticated concurrency acceptance pending | Manager offer, employee-scoped eligibility, expiry, locked/idempotent claim, hard-rule revalidation and immutable successor publication in `20260729002000_governed_open_shifts.sql`. |
 | Controlled swaps | Implemented; remote migration and authenticated acceptance pending | Employee proposal, scoped candidate list/consent, manager decision, hard-rule revalidation, cost comparison and immutable successor publication in `20260729001900_controlled_shift_swaps.sql`. |
-| Append-only attendance and corrections | Partially implemented | Clock/break/out events and correction/approval records exist; missed-event and full manager decision UI remain. |
+| Append-only attendance and corrections | Implemented; remote migration and authenticated acceptance pending | Immutable/idempotent clock ledger, guarded transitions, explicit manager-authored missed events and reasoned correction decisions in `20260729002100_append_only_timekeeping.sql`. |
 | Labour-to-close propagation | Partially implemented | Integer planned/actual labour calculations and close surfaces exist; approved-hours evidence propagation and locked learning need end-to-end acceptance. |
 | Workforce exception inbox and learning | Partially implemented | Coverage/sickness decisions are direct; unified ranked queue and evidence-backed comparable-service learning remain. |
 | NL/EN, responsive and accessibility | Partially implemented | Core authenticated planner is localized and responsive; full route/browser acceptance at four widths remains. |

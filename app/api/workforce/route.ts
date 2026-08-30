@@ -3,7 +3,7 @@ import {z} from "zod";
 import {requireMembership} from "../../../lib/auth/require-membership";
 import {assertSameOrigin,securityErrorResponse} from "../../../lib/http/security";
 
-const inputSchema=z.object({organisationId:z.string().uuid(),action:z.enum(["respond","request_leave","report_sickness","withdraw_leave","clock_in","start_break","end_break","clock_out","claim_open_shift","request_swap","respond_swap","request_correction","approve_time"]),values:z.record(z.string(),z.string())});
+const inputSchema=z.object({organisationId:z.string().uuid(),action:z.enum(["respond","request_leave","report_sickness","withdraw_leave","clock_in","start_break","end_break","clock_out","claim_open_shift","request_swap","respond_swap","request_correction","decide_correction","record_missed_event","approve_time"]),values:z.record(z.string(),z.string())});
 
 export async function POST(request:Request){
   try{
@@ -19,9 +19,9 @@ export async function POST(request:Request){
       return NextResponse.json({message:values.response==="accepted"?"Dienst bevestigd.":"Afwijzing is aan de planner doorgegeven."},{status:201});
     }
     if(input.action==="clock_in"){
-      const values=z.object({venueId:z.string().uuid(),shiftId:z.string().uuid().optional()}).parse(input.values);
+      const values=z.object({venueId:z.string().uuid(),shiftId:z.string().uuid().optional(),idempotencyKey:z.string().uuid()}).parse(input.values);
       const {supabase}=await requireMembership(input.organisationId,"time.record",values.venueId);
-      const {error}=await supabase.rpc("clock_in",{target_organisation_id:input.organisationId,target_venue_id:values.venueId,target_shift_id:values.shiftId||null});
+      const {error}=await supabase.rpc("clock_in_v2" as "clock_in",{target_organisation_id:input.organisationId,target_venue_id:values.venueId,target_shift_id:values.shiftId||null,target_idempotency_key:values.idempotencyKey} as never);
       if(error)throw error;
       return NextResponse.json({message:"Ingeklokt. Je starttijd is veilig vastgelegd."},{status:201});
     }
@@ -36,24 +36,24 @@ export async function POST(request:Request){
       const {error}=await supabase.rpc("withdraw_staff_leave" as "clock_out",{target_organisation_id:input.organisationId,target_absence_id:values.absenceId} as never);if(error)throw error;return NextResponse.json({message:"Openstaande verlofaanvraag ingetrokken."});
     }
     if(input.action==="clock_out"){
-      const values=z.object({timeRecordId:z.string().uuid()}).parse(input.values);
+      const values=z.object({timeRecordId:z.string().uuid(),idempotencyKey:z.string().uuid()}).parse(input.values);
       const {supabase}=await requireMembership(input.organisationId,"time.record");
-      const {error}=await supabase.rpc("clock_out",{target_organisation_id:input.organisationId,target_time_record_id:values.timeRecordId});
+      const {error}=await supabase.rpc("clock_out_v2" as "clock_out",{target_organisation_id:input.organisationId,target_time_record_id:values.timeRecordId,target_idempotency_key:values.idempotencyKey} as never);
       if(error)throw error;
       return NextResponse.json({message:"Uitgeklokt en uren ter goedkeuring ingediend."});
     }
     if(input.action==="start_break"||input.action==="end_break"){
-      const values=z.object({timeRecordId:z.string().uuid()}).parse(input.values);
+      const values=z.object({timeRecordId:z.string().uuid(),idempotencyKey:z.string().uuid()}).parse(input.values);
       const {supabase}=await requireMembership(input.organisationId,"time.record");
-      const functionName=input.action==="start_break"?"start_time_break":"end_time_break";
-      const {error}=await supabase.rpc(functionName as "clock_out",{target_organisation_id:input.organisationId,target_time_record_id:values.timeRecordId});
+      const functionName=input.action==="start_break"?"start_time_break_v2":"end_time_break_v2";
+      const {error}=await supabase.rpc(functionName as "clock_out",{target_organisation_id:input.organisationId,target_time_record_id:values.timeRecordId,target_idempotency_key:values.idempotencyKey} as never);
       if(error)throw error;
       return NextResponse.json({message:input.action==="start_break"?"Pauze gestart en onveranderlijk vastgelegd.":"Pauze beëindigd en vastgelegd."});
     }
     if(input.action==="claim_open_shift"){
-      const values=z.object({offerId:z.string().uuid()}).parse(input.values);
+      const values=z.object({offerId:z.string().uuid(),idempotencyKey:z.string().uuid()}).parse(input.values);
       const {supabase}=await requireMembership(input.organisationId,"planning.respond");
-      const {error}=await supabase.rpc("claim_open_shift" as "clock_out",{target_organisation_id:input.organisationId,target_offer_id:values.offerId} as never);
+      const {error}=await supabase.rpc("claim_open_shift_v2" as "clock_out",{target_organisation_id:input.organisationId,target_offer_id:values.offerId,target_idempotency_key:values.idempotencyKey} as never);
       if(error)throw error;
       return NextResponse.json({message:"Open dienst atomair toegewezen. Een gelijktijdige tweede claim kan deze dienst niet overnemen."});
     }
@@ -73,6 +73,14 @@ export async function POST(request:Request){
       const corrections=supabase.from("time_corrections") as unknown as {insert:(value:Record<string,unknown>)=>Promise<{error:unknown}>};
       const {error}=await corrections.insert({organisation_id:input.organisationId,venue_id:values.venueId,time_record_id:values.timeRecordId,requested_by:user.id,reason:values.reason,original_values:{clocked_in_at:record.clocked_in_at,clocked_out_at:record.clocked_out_at,break_minutes:record.break_minutes},proposed_values:{clocked_in_at:values.proposedClockIn?new Date(values.proposedClockIn).toISOString():record.clocked_in_at,clocked_out_at:values.proposedClockOut?new Date(values.proposedClockOut).toISOString():record.clocked_out_at,break_minutes:values.proposedBreakMinutes},status:"requested"});if(error)throw error;
       return NextResponse.json({message:"Uurcorrectie ingediend; oorspronkelijke tijdgebeurtenissen blijven behouden."},{status:201});
+    }
+    if(input.action==="decide_correction"){
+      const values=z.object({correctionId:z.string().uuid(),decision:z.enum(["approved","rejected"]),reason:z.string().trim().min(3).max(1000)}).parse(input.values);const {supabase}=await requireMembership(input.organisationId,"time.approve");
+      const {data,error}=await supabase.rpc("decide_time_correction" as "clock_out",{target_organisation_id:input.organisationId,target_correction_id:values.correctionId,target_decision:values.decision,target_reason:values.reason} as never);if(error)throw error;return NextResponse.json({message:values.decision==="approved"?"Correctie goedgekeurd; oorspronkelijke klokgebeurtenissen blijven onveranderd.":"Correctie afgewezen en geaudit.",correction:data});
+    }
+    if(input.action==="record_missed_event"){
+      const values=z.object({venueId:z.string().uuid(),staffId:z.string().uuid(),shiftId:z.string().uuid().optional(),clockedInAt:z.iso.datetime({local:true}),clockedOutAt:z.iso.datetime({local:true}),breakMinutes:z.coerce.number().int().min(0).max(480),reason:z.string().trim().min(5).max(1000),idempotencyKey:z.string().uuid()}).parse(input.values);const {supabase}=await requireMembership(input.organisationId,"time.approve",values.venueId);
+      const {data,error}=await supabase.rpc("record_missed_time_event" as "clock_out",{target_organisation_id:input.organisationId,target_venue_id:values.venueId,target_staff_id:values.staffId,target_shift_id:values.shiftId||null,target_clocked_in_at:new Date(values.clockedInAt).toISOString(),target_clocked_out_at:new Date(values.clockedOutAt).toISOString(),target_break_minutes:values.breakMinutes,target_reason:values.reason,target_idempotency_key:values.idempotencyKey} as never);if(error)throw error;return NextResponse.json({message:"Gemiste klokregistratie als managercorrectie vastgelegd; bronbewijs blijft zichtbaar.",timeRecord:data},{status:201});
     }
     const values=z.object({timeRecordId:z.string().uuid(),correctionReason:z.string().trim().max(1000).default("")}).parse(input.values);
     const {supabase}=await requireMembership(input.organisationId,"time.approve");
