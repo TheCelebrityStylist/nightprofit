@@ -26,11 +26,32 @@ export type CoverageInterval = CoverageRequirement & {
   laborBasisPoints: number | null;
 };
 
+export type ConstraintShift = { id: string; staffId: string | null; startsAt: string; endsAt: string; breakMinutes: number };
+export type ConstraintStaff = { id: string; maximumMinutes: number | null };
+
 const minutesBetween = (startsAt: string, endsAt: string) => {
   const minutes = Math.floor((new Date(endsAt).getTime() - new Date(startsAt).getTime()) / 60_000);
   if (!Number.isInteger(minutes) || minutes <= 0) throw new Error("INVALID_INTERVAL");
   return minutes;
 };
+
+export function analyzeRosterConstraints(shifts: readonly ConstraintShift[], staff: readonly ConstraintStaff[]) {
+  let overlaps=0,restViolations=0,maximumMinutesViolations=0;
+  const minutesByStaff=new Map<string,number>();
+  for(const person of staff){
+    const assigned=shifts.filter(shift=>shift.staffId===person.id).toSorted((left,right)=>new Date(left.startsAt).getTime()-new Date(right.startsAt).getTime());
+    let previous:ConstraintShift|undefined;
+    for(const shift of assigned){
+      const minutes=minutesBetween(shift.startsAt,shift.endsAt)-shift.breakMinutes;
+      if(minutes<0)throw new Error("INVALID_BREAK_DURATION");
+      minutesByStaff.set(person.id,(minutesByStaff.get(person.id)??0)+minutes);
+      if(previous){const rest=new Date(shift.startsAt).getTime()-new Date(previous.endsAt).getTime();if(rest<0)overlaps+=1;else if(rest<11*60*60_000)restViolations+=1;}
+      if(!previous||new Date(shift.endsAt)>new Date(previous.endsAt))previous=shift;
+    }
+    if(person.maximumMinutes!==null&&(minutesByStaff.get(person.id)??0)>person.maximumMinutes)maximumMinutesViolations+=1;
+  }
+  return{overlaps,restViolations,maximumMinutesViolations,total:overlaps+restViolations+maximumMinutesViolations,minutesByStaff};
+}
 
 export function calculateCoverage(
   requirements: readonly CoverageRequirement[],

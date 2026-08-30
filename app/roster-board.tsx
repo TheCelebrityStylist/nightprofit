@@ -6,7 +6,7 @@ import { useAuthLocale } from "./auth-locale";
 import { AvailabilityManager } from "./availability-manager";
 import { EmployeeCsvImport } from "./employee-csv-import";
 import { utcToZonedInput, zonedInputToUtc } from "@/lib/workforce/timezone";
-import { calculateCoverage, rankReplacements, rosterHealth, simulateDemand } from "@/lib/workforce/decision-support";
+import { analyzeRosterConstraints, calculateCoverage, rankReplacements, rosterHealth, simulateDemand } from "@/lib/workforce/decision-support";
 
 type Venue = { id: string; name: string; timezone: string };
 type Department = { id: string; venue_id: string; name: string };
@@ -32,6 +32,7 @@ type Staff = {
 type StaffAvailability={staff_id:string;venue_id:string;starts_at:string;ends_at:string;availability:"available"|"preferred"|"preferably_not"|"unavailable";submitted_at:string|null;source:string};
 type Qualification={staff_id:string;role_id:string;qualified_until:string|null};
 type TimeRecord={id:string;venue_id:string;staff_id:string;shift_id:string|null;clocked_in_at:string;clocked_out_at:string|null;break_minutes:number;status:string;approved_at:string|null};
+type BreakPlan={id:string;venue_id:string;shift_id:string;starts_at:string;ends_at:string;status:string;revision:number};
 type Interval = {
   id: string;
   venue_id: string;
@@ -105,6 +106,7 @@ export function RosterBoard({
   staffAvailability,
   qualifications,
   timeRecords,
+  breakPlans,
   proposals,
 }: {
   organisationId: string;
@@ -118,6 +120,7 @@ export function RosterBoard({
   staffAvailability: StaffAvailability[];
   qualifications: Qualification[];
   timeRecords: TimeRecord[];
+  breakPlans: BreakPlan[];
   proposals: Proposal[];
 }) {
   const { locale } = useAuthLocale(),
@@ -159,6 +162,8 @@ export function RosterBoard({
       new Date(row.starts_at) >= weekStart &&
       new Date(row.starts_at) < weekEnd,
   );
+  const visibleBreakPlans=breakPlans.filter(plan=>plan.venue_id===venueId&&visibleShifts.some(shift=>shift.id===plan.shift_id)&&plan.status!=="cancelled");
+  const breakConflicts=visibleIntervals.filter(interval=>{const assigned=visibleShifts.filter(shift=>shift.staff_id&&new Date(shift.starts_at)<new Date(interval.ends_at)&&new Date(shift.ends_at)>new Date(interval.starts_at));const onBreak=new Set(visibleBreakPlans.filter(plan=>new Date(plan.starts_at)<new Date(interval.ends_at)&&new Date(plan.ends_at)>new Date(interval.starts_at)).map(plan=>plan.shift_id));return assigned.length>=interval.required_staff&&assigned.filter(shift=>!onBreak.has(shift.id)).length<interval.required_staff;}).length;
   const venueDepartments = departments.filter((row) => row.venue_id === venueId);
   const activeStaff = staff.filter((row) => row.onboarding_status !== "suspended");
   const revenue = visibleIntervals.reduce(
@@ -185,16 +190,25 @@ export function RosterBoard({
     visibleShifts.map((row) => ({id:row.id,startsAt:row.starts_at,endsAt:row.ends_at,roleId:"all",staffId:row.staff_id,hourlyCostMinor:BigInt(row.hourly_cost_minor),breakMinutes:row.break_minutes})),
   );
   const scenario = scenarioBasisPoints ? simulateDemand(coverageIntervals, scenarioBasisPoints) : null;
+  const constraints=analyzeRosterConstraints(visibleShifts.map(shift=>({id:shift.id,staffId:shift.staff_id,startsAt:shift.starts_at,endsAt:shift.ends_at,breakMinutes:shift.break_minutes})),activeStaff.map(person=>({id:person.id,maximumMinutes:person.maximum_minutes_week??null})));
+  const availabilityConflicts=visibleShifts.filter(shift=>{
+    if(!shift.staff_id)return false;
+    if(absences.some(absence=>absence.staff_id===shift.staff_id&&absence.status!=="rejected"&&new Date(absence.starts_at)<new Date(shift.ends_at)&&new Date(absence.ends_at)>new Date(shift.starts_at)))return true;
+    const availability=staffAvailability.find(row=>row.staff_id===shift.staff_id&&row.venue_id===venueId&&new Date(row.starts_at)<=new Date(shift.starts_at)&&new Date(row.ends_at)>=new Date(shift.ends_at));
+    return !availability||availability.availability==="unavailable";
+  }).length;
+  const skillConflicts=visibleShifts.filter(shift=>shift.staff_id&&!qualifications.some(row=>row.staff_id===shift.staff_id&&row.role_id===shift.role_id&&(!row.qualified_until||row.qualified_until>=shift.starts_at.slice(0,10)))).length;
+  const hourImbalances=activeStaff.filter(person=>person.contracted_minutes_week!=null&&Math.abs((constraints.minutesByStaff.get(person.id)??0)-person.contracted_minutes_week)>=60).length;
   const health = rosterHealth({
     coverage: coverageIntervals,
-    hardConstraintViolations: 0,
-    availabilityConflicts: visibleShifts.filter((shift) => absences.some((absence) => absence.staff_id === shift.staff_id && absence.status !== "rejected" && new Date(absence.starts_at) < new Date(shift.ends_at) && new Date(absence.ends_at) > new Date(shift.starts_at))).length,
-    skillConflicts: 0,
+    hardConstraintViolations: constraints.total,
+    availabilityConflicts,
+    skillConflicts,
     laborBasisPoints: revenue ? Number((labor * 10_000n) / revenue) : null,
     targetLaborBasisPoints: 2_000,
-    hourImbalances: 0,
+    hourImbalances,
     preferenceMisses: proposals.find((row) => row.objective === "preference")?.result_summary.unfilled_assignments ?? 0,
-    breakConflicts: 0,
+    breakConflicts,
     missingEvidence: visibleIntervals.length ? [] : ["demand"],
   });
   const sicknessCases = absences.filter((absence)=>absence.venue_id===venueId&&absence.absence_type==="sickness"&&absence.status==="recorded").flatMap((absence)=>
@@ -702,6 +716,7 @@ export function RosterBoard({
             ) : panel === "shift" && selected ? (
               <ShiftEditor
                 row={selected}
+                breakPlan={visibleBreakPlans.find(plan=>plan.shift_id===selected.id)}
                 departments={venueDepartments}
                 roles={roles}
                 staff={activeStaff}
@@ -734,6 +749,7 @@ export function RosterBoard({
                   );
                 }}
                 resize={(minutes) => resize(selected, minutes)}
+                planBreak={(values)=>{values.startsAt=toUtc(values.breakStartsAt);values.endsAt=toUtc(values.breakEndsAt);void mutate("break_plan",{venueId:selected.venue_id,shiftId:selected.id,startsAt:values.startsAt,endsAt:values.endsAt},()=>router.refresh())}}
                 duplicate={() => void mutate("shift_duplicate",{venueId:selected.venue_id,shiftId:selected.id,idempotencyKey:crypto.randomUUID()},()=>router.refresh())}
                 toggleLock={() => void mutate("shift_lock",{venueId:selected.venue_id,shiftId:selected.id,locked:String(!selected.locked),expectedRevision:String(selected.revision??1)},()=>{setShifts(current=>current.map(item=>item.id===selected.id?{...selected,locked:!selected.locked,revision:(selected.revision??1)+1}:item));setSelected(current=>current?{...current,locked:!current.locked,revision:(current.revision??1)+1}:current)})}
                 cancel={() =>
@@ -900,6 +916,7 @@ function NewShiftEditor({
 
 function ShiftEditor({
   row,
+  breakPlan,
   departments,
   roles,
   staff,
@@ -908,11 +925,13 @@ function ShiftEditor({
   toLocal,
   save,
   resize,
+  planBreak,
   duplicate,
   toggleLock,
   cancel,
 }: {
   row: Shift;
+  breakPlan?: BreakPlan;
   departments: Department[];
   roles: Role[];
   staff: Staff[];
@@ -921,11 +940,14 @@ function ShiftEditor({
   toLocal: (value: string) => string;
   save: (values: Record<string, string>) => void;
   resize: (minutes: number) => void;
+  planBreak: (values: Record<string, string>) => void;
   duplicate: () => void;
   toggleLock: () => void;
   cancel: () => void;
 }) {
   const tx = (nl: string, en: string) => (locale === "nl" ? nl : en);
+  const breakDuration=Math.max(1,row.break_minutes||30),shiftStart=new Date(row.starts_at).getTime(),shiftEnd=new Date(row.ends_at).getTime();
+  const defaultBreakStart=breakPlan?new Date(breakPlan.starts_at):new Date(shiftStart+Math.max(0,Math.floor((shiftEnd-shiftStart-breakDuration*60000)/2))),defaultBreakEnd=breakPlan?new Date(breakPlan.ends_at):new Date(defaultBreakStart.getTime()+breakDuration*60000);
   return (
     <form
       onSubmit={(event) => {
@@ -998,6 +1020,14 @@ function ShiftEditor({
           defaultValue={(Number(BigInt(row.hourly_cost_minor)) / 100).toFixed(2)}
         />
       </label>
+      <fieldset>
+        <legend>{tx("Gepland pauzevenster","Planned break window")}</legend>
+        {breakPlan?<small>{tx("Opgeslagen","Saved")} · {tx(breakPlan.status,breakPlan.status)}</small>:null}
+        <label>{tx("Pauze start","Break starts")}<input name="breakStartsAt" type="datetime-local" defaultValue={toLocal(defaultBreakStart.toISOString())}/></label>
+        <label>{tx("Pauze einde","Break ends")}<input name="breakEndsAt" type="datetime-local" defaultValue={toLocal(defaultBreakEnd.toISOString())}/></label>
+        <button type="button" disabled={busy||row.locked||row.break_minutes<=0} onClick={(event)=>{const form=event.currentTarget.form;if(form)planBreak(Object.fromEntries(new FormData(form)) as Record<string,string>)}}>{tx("Pauzevenster opslaan","Save break window")}</button>
+        {row.break_minutes<=0?<small>{tx("Stel eerst pauzeminuten in en sla de dienst op.","Set break minutes and save the shift first.")}</small>:null}
+      </fieldset>
       <div className="resize-actions">
         <button type="button" disabled={busy||row.locked} onClick={() => resize(-30)}>
           −30m

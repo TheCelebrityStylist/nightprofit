@@ -11,7 +11,7 @@ import {calculateCoverage,simulateDemand} from "../../../lib/workforce/decision-
 const envelope=z.object({
   organisationId:z.string().uuid(),
   locale:z.enum(["nl-NL","en-US"]).default("nl-NL"),
-  action:z.enum(["department","role","forecast","shift","shift_update","shift_cancel","shift_duplicate","shift_lock","copy_week","staff","staff_deactivate","absence","absence_decide","publish","availability","proposal","proposal_apply","scenario","resolve_action"]),
+  action:z.enum(["department","role","forecast","shift","shift_update","shift_cancel","shift_duplicate","shift_lock","break_plan","copy_week","staff","staff_deactivate","absence","absence_decide","publish","availability","proposal","proposal_apply","scenario","resolve_action"]),
   values:z.record(z.string(),z.string()),
 });
 const departmentSchema=z.object({venueId:z.string().uuid(),name:z.string().trim().min(2).max(100)});
@@ -22,6 +22,7 @@ const shiftUpdateSchema=shiftSchema.extend({shiftId:z.string().uuid(),expectedRe
 const shiftCancelSchema=z.object({venueId:z.string().uuid(),shiftId:z.string().uuid()});
 const shiftLockSchema=z.object({venueId:z.string().uuid(),shiftId:z.string().uuid(),locked:z.enum(["true","false"]),expectedRevision:z.coerce.number().int().positive()});
 const shiftDuplicateSchema=z.object({venueId:z.string().uuid(),shiftId:z.string().uuid(),idempotencyKey:z.string().uuid()});
+const breakPlanSchema=z.object({venueId:z.string().uuid(),shiftId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true})});
 const copyWeekSchema=z.object({venueId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),idempotencyKey:z.string().uuid()});
 const staffSchema=z.object({venueId:z.string().uuid(),fullName:z.string().trim().min(2).max(140),email:z.union([z.literal(""),z.email()]),phone:z.string().trim().max(40),roleName:z.string().trim().min(2).max(100),engagementType:z.enum(["employee","contractor","temporary"]),preferredLanguage:z.enum(["nl","en"])});
 const staffDeactivateSchema=z.object({staffId:z.string().uuid()});
@@ -107,6 +108,18 @@ export async function POST(request:Request){
       const {data:source,error:sourceError}=await supabase.from("shifts").select("department_id,role_id,starts_at,ends_at,break_minutes,hourly_cost_minor").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).eq("id",values.shiftId).single();if(sourceError||!source)throw sourceError??new Error("SHIFT_NOT_FOUND");
       const row=source as unknown as {department_id:string;role_id:string;starts_at:string;ends_at:string;break_minutes:number;hourly_cost_minor:string};const {error}=await supabase.from("shifts").insert({...row,organisation_id:input.organisationId,venue_id:values.venueId,staff_id:null,status:"draft",source:"manager",created_by:user.id});if(error)throw error;await jobs.update({status:"succeeded",finished_at:new Date().toISOString()}).eq("idempotency_key",receipt);
       return NextResponse.json({message:"Dienst als open concept gedupliceerd."},{status:201});
+    }
+    if(input.action==="break_plan"){
+      const values=breakPlanSchema.parse(input.values);const {supabase,user}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
+      const startsAt=iso(values.startsAt),endsAt=iso(values.endsAt);if(new Date(endsAt)<=new Date(startsAt))throw new Error("INVALID_BREAK_WINDOW");
+      const {data:shift,error:shiftError}=await supabase.from("shifts").select("starts_at,ends_at,break_minutes").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).eq("id",values.shiftId).single();if(shiftError||!shift)throw shiftError??new Error("SHIFT_NOT_FOUND");
+      const row=shift as unknown as {starts_at:string;ends_at:string;break_minutes:number};const duration=Math.floor((new Date(endsAt).getTime()-new Date(startsAt).getTime())/60000);
+      if(new Date(startsAt)<new Date(row.starts_at)||new Date(endsAt)>new Date(row.ends_at)||duration>row.break_minutes)throw new Error("BREAK_OUTSIDE_SHIFT");
+      const plans=supabase.from("shift_break_plans");const {data:existing,error:existingError}=await plans.select("id,revision").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).eq("shift_id",values.shiftId).in("status",["planned","adjusted"]).maybeSingle();if(existingError)throw existingError;
+      const existingPlan=existing as unknown as {id:string;revision:number}|null;
+      if(existingPlan){const {data,error}=await plans.update({starts_at:startsAt,ends_at:endsAt,status:"adjusted",revision:existingPlan.revision+1,updated_at:new Date().toISOString()}).eq("organisation_id",input.organisationId).eq("id",existingPlan.id).eq("revision",existingPlan.revision).select("id").single();if(error||!data)throw error??new Error("CONCURRENT_BREAK_EDIT");}
+      else{const {error}=await plans.insert({organisation_id:input.organisationId,venue_id:values.venueId,shift_id:values.shiftId,starts_at:startsAt,ends_at:endsAt,status:"planned",created_by:user.id});if(error)throw error;}
+      return NextResponse.json({message:"Pauzevenster opgeslagen; dekkingscontrole is bijgewerkt."},{status:201});
     }
     if(input.action==="copy_week"){
       const values=copyWeekSchema.parse(input.values);

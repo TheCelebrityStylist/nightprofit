@@ -26,4 +26,12 @@ describe("guided roster setup", () => {
     expect(route).toContain("rejected:preview.rejected");
     expect(component).toContain("preview.accepted.length === 0");
   });
+
+  it("persists one concurrency-controlled break window inside its shift", () => {
+    const route = readFileSync("app/api/planning/route.ts", "utf8");
+    expect(route).toContain('input.action==="break_plan"');
+    expect(route).toContain('throw new Error("BREAK_OUTSIDE_SHIFT")');
+    expect(route).toContain('.eq("revision",existingPlan.revision).select("id").single()');
+    expect(route).toContain('status:"adjusted",revision:existingPlan.revision+1');
+  });
 });

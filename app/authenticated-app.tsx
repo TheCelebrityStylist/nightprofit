@@ -940,6 +940,7 @@ async function planning(
     { data: staffAvailabilityData },
     { data: qualificationData },
     { data: timeRecordData },
+    { data: breakPlanData },
   ] = await Promise.all([
     supabase
       .from("departments")
@@ -1015,6 +1016,7 @@ async function planning(
       .eq("organisation_id", organisationId)
       .order("clocked_in_at", { ascending: false })
       .limit(200),
+    supabase.from("shift_break_plans").select("id,venue_id,shift_id,starts_at,ends_at,status,revision").eq("organisation_id",organisationId).in("status",["planned","adjusted","taken","missed"]).order("starts_at",{ascending:false}).limit(200),
   ]);
   const departments = (departmentData ?? []) as unknown as {
     id: string;
@@ -1094,6 +1096,7 @@ async function planning(
   const staffAvailability = (staffAvailabilityData ?? []) as unknown as {staff_id:string;venue_id:string;starts_at:string;ends_at:string;availability:"available"|"preferred"|"preferably_not"|"unavailable";submitted_at:string|null;source:string}[];
   const qualifications = (qualificationData ?? []) as unknown as {staff_id:string;role_id:string;qualified_until:string|null}[];
   const timeRecords = (timeRecordData ?? []) as unknown as {id:string;venue_id:string;staff_id:string;shift_id:string|null;clocked_in_at:string;clocked_out_at:string|null;break_minutes:number;status:string;approved_at:string|null}[];
+  const breakPlans=(breakPlanData??[]) as unknown as {id:string;venue_id:string;shift_id:string;starts_at:string;ends_at:string;status:string;revision:number}[];
   const departmentOptions = departments.map((row) => ({
     label: row.name,
     value: row.id,
@@ -1119,6 +1122,7 @@ async function planning(
       staffAvailability={staffAvailability}
       qualifications={qualifications}
       timeRecords={timeRecords}
+      breakPlans={breakPlans}
       proposals={proposals}
     />
   );
