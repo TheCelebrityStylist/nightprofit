@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type DragEvent } from "react";
+import { useEffect, useMemo, useState, type DragEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthLocale } from "./auth-locale";
 import { AvailabilityManager } from "./availability-manager";
@@ -33,6 +33,7 @@ type StaffAvailability={staff_id:string;venue_id:string;starts_at:string;ends_at
 type Qualification={staff_id:string;role_id:string;qualified_until:string|null};
 type TimeRecord={id:string;venue_id:string;staff_id:string;shift_id:string|null;clocked_in_at:string;clocked_out_at:string|null;break_minutes:number;status:string;approved_at:string|null};
 type BreakPlan={id:string;venue_id:string;shift_id:string;starts_at:string;ends_at:string;status:string;revision:number};
+type RosterTemplate={id:string;venue_id:string;name:string;shift_pattern:unknown[];active:boolean};
 type Interval = {
   id: string;
   venue_id: string;
@@ -107,6 +108,7 @@ export function RosterBoard({
   qualifications,
   timeRecords,
   breakPlans,
+  rosterTemplates,
   proposals,
 }: {
   organisationId: string;
@@ -121,6 +123,7 @@ export function RosterBoard({
   qualifications: Qualification[];
   timeRecords: TimeRecord[];
   breakPlans: BreakPlan[];
+  rosterTemplates: RosterTemplate[];
   proposals: Proposal[];
 }) {
   const { locale } = useAuthLocale(),
@@ -130,6 +133,14 @@ export function RosterBoard({
   const [weekStart, setWeekStart] = useState(() => monday(new Date()));
   const [shifts, setShifts] = useState(initialShifts);
   const [selected, setSelected] = useState<Shift | null>(null);
+  const [view, setView] = useState<"week" | "day" | "month">("week");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [undoStack, setUndoStack] = useState<string[]>([]);
+  const [redoStack, setRedoStack] = useState<string[]>([]);
+  const [templateName,setTemplateName]=useState("");
+  const [templateId,setTemplateId]=useState("");
+  const [templateRepeats,setTemplateRepeats]=useState(1);
+  useEffect(()=>{const handle=window.setTimeout(()=>setShifts(initialShifts),0);return()=>window.clearTimeout(handle)},[initialShifts]);
   const [panel, setPanel] = useState<"shift" | "new" | "team" | "absence" | "availability" | null>(
     null,
   );
@@ -271,6 +282,29 @@ export function RosterBoard({
   }
   async function workforceMutate(action:string,values:Record<string,string>){
     setBusy(true);setMessage("");try{const response=await fetch("/api/workforce",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({organisationId,action,values})});const result=await response.json() as {message?:string};if(!response.ok)throw new Error(tx("De urenactie kon niet worden opgeslagen.","The hours action could not be saved."));setMessage(result.message??tx("Opgeslagen.","Saved."));router.refresh()}catch(error){setMessage(error instanceof Error?error.message:tx("Opslaan mislukt.","Save failed."))}finally{setBusy(false)}
+  }
+  async function bulkMutate(operation:"cancel"|"lock"|"unlock"|"assign"|"role",extra:Record<string,string>={}){
+    const rows=visibleShifts.filter(row=>selectedIds.includes(row.id));
+    if(!rows.length)return;
+    setBusy(true);setMessage("");
+    try{
+      const response=await fetch("/api/planning",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({organisationId,locale:locale==="nl"?"nl-NL":"en-US",action:"shift_bulk",values:{venueId,shiftIds:JSON.stringify(rows.map(row=>row.id)),expectedRevisions:JSON.stringify(Object.fromEntries(rows.map(row=>[row.id,row.revision??1]))),operation,idempotencyKey:crypto.randomUUID(),...extra}})});
+      const result=await response.json() as {message?:string;errorCode?:string;changeSetId?:string};
+      if(!response.ok)throw new Error(result.errorCode==="PLANNING_ACTION_FAILED"?tx("De selectie is intussen gewijzigd of bevat vergrendelde diensten.","The selection changed concurrently or contains locked shifts."):tx("Bulkbewerking mislukt.","Bulk edit failed."));
+      if(result.changeSetId){setUndoStack(current=>[...current,result.changeSetId!]);setRedoStack([])}
+      setSelectedIds([]);setMessage(result.message??tx("Selectie opgeslagen.","Selection saved."));router.refresh();
+    }catch(error){setMessage(error instanceof Error?error.message:tx("Bulkbewerking mislukt.","Bulk edit failed."))}finally{setBusy(false)}
+  }
+  async function replayHistory(direction:"undo"|"redo"){
+    const source=direction==="undo"?undoStack:redoStack,changeSetId=source.at(-1);if(!changeSetId)return;
+    setBusy(true);setMessage("");
+    try{const response=await fetch("/api/planning",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({organisationId,locale:locale==="nl"?"nl-NL":"en-US",action:"planner_history",values:{venueId,changeSetId,direction}})});const result=await response.json() as {message?:string};if(!response.ok)throw new Error(tx("Ongedaan maken is geblokkeerd door een nieuwere wijziging.","Undo is blocked by a newer change."));
+      if(direction==="undo"){setUndoStack(current=>current.slice(0,-1));setRedoStack(current=>[...current,changeSetId])}else{setRedoStack(current=>current.slice(0,-1));setUndoStack(current=>[...current,changeSetId])}setMessage(result.message??tx("Roosterhistorie bijgewerkt.","Roster history updated."));router.refresh();
+    }catch(error){setMessage(error instanceof Error?error.message:tx("Historieactie mislukt.","History action failed."))}finally{setBusy(false)}
+  }
+  async function templateMutate(action:"template_save"|"template_apply"){
+    if(action==="template_save"&&(!selectedIds.length||templateName.trim().length<2))return;if(action==="template_apply"&&!templateId)return;
+    setBusy(true);setMessage("");try{const values=action==="template_save"?{venueId,name:templateName,shiftIds:JSON.stringify(selectedIds)}:{venueId,templateId,startsAt:weekStart.toISOString(),repeatCount:String(templateRepeats),idempotencyKey:crypto.randomUUID()};const response=await fetch("/api/planning",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({organisationId,locale:locale==="nl"?"nl-NL":"en-US",action,values})});const result=await response.json() as {message?:string};if(!response.ok)throw new Error(tx("Templateactie kon niet worden opgeslagen.","Template action could not be saved."));setMessage(result.message??tx("Template opgeslagen.","Template saved."));setSelectedIds([]);setTemplateName("");router.refresh()}catch(error){setMessage(error instanceof Error?error.message:tx("Templateactie mislukt.","Template action failed."))}finally{setBusy(false)}
   }
   const shiftValues = (row: Shift) => ({
     venueId: row.venue_id,
@@ -441,6 +475,26 @@ export function RosterBoard({
         <button className="secondary" onClick={() => setPanel("absence")}>
           {tx("Verlof / ziek", "Leave / sickness")}
         </button>
+        <div className="planner-view-switch" role="group" aria-label={tx("Roosterweergave","Roster view")}>
+          {(["week","day","month"] as const).map(option=><button type="button" key={option} className={view===option?"active":""} aria-pressed={view===option} onClick={()=>setView(option)}>{option==="week"?tx("Week","Week"):option==="day"?tx("Dag","Day"):tx("Maand","Month")}</button>)}
+        </div>
+      </section>
+      <section className="planner-edit-bar" aria-label={tx("Roosterbewerkingen","Roster editing actions")}>
+        <span>{selectedIds.length?`${selectedIds.length} ${tx("geselecteerd","selected")}`:tx("Selecteer diensten voor bulkbewerking","Select shifts for bulk editing")}</span>
+        <button type="button" disabled={busy||!undoStack.length} onClick={()=>void replayHistory("undo")}>↶ {tx("Ongedaan","Undo")}</button>
+        <button type="button" disabled={busy||!redoStack.length} onClick={()=>void replayHistory("redo")}>↷ {tx("Opnieuw","Redo")}</button>
+        <button type="button" disabled={busy||!selectedIds.length} onClick={()=>void bulkMutate("lock")}>{tx("Vergrendel","Lock")}</button>
+        <button type="button" disabled={busy||!selectedIds.length} onClick={()=>void bulkMutate("unlock")}>{tx("Ontgrendel","Unlock")}</button>
+        <select aria-label={tx("Geselecteerde diensten toewijzen","Assign selected shifts")} value="" disabled={busy||!selectedIds.length} onChange={event=>{if(event.target.value)void bulkMutate("assign",{staffId:event.target.value})}}><option value="">{tx("Toewijzen…","Assign…")}</option>{activeStaff.map(person=><option key={person.id} value={person.id}>{person.full_name}</option>)}</select>
+        <select aria-label={tx("Rol van geselecteerde diensten","Role for selected shifts")} value="" disabled={busy||!selectedIds.length} onChange={event=>{if(event.target.value)void bulkMutate("role",{roleId:event.target.value})}}><option value="">{tx("Rol wijzigen…","Change role…")}</option>{roles.filter(role=>venueDepartments.some(department=>department.id===role.department_id)).map(role=><option key={role.id} value={role.id}>{role.name}</option>)}</select>
+        <button type="button" className="danger" disabled={busy||!selectedIds.length} onClick={()=>void bulkMutate("cancel")}>{tx("Verwijder","Delete")}</button>
+      </section>
+      <section className="planner-template-bar" aria-label={tx("Roostertemplates en herhaling","Roster templates and recurrence")}>
+        <label>{tx("Naam template","Template name")}<input value={templateName} maxLength={100} onChange={event=>setTemplateName(event.target.value)} placeholder={tx("Bijv. reguliere clubnacht","E.g. regular club night")}/></label>
+        <button type="button" disabled={busy||!selectedIds.length||templateName.trim().length<2} onClick={()=>void templateMutate("template_save")}>{tx("Selectie als template","Save selection as template")}</button>
+        <label>{tx("Bestaande template","Existing template")}<select value={templateId} onChange={event=>setTemplateId(event.target.value)}><option value="">{tx("Kies template…","Choose template…")}</option>{rosterTemplates.filter(template=>template.venue_id===venueId).map(template=><option value={template.id} key={template.id}>{template.name} · {template.shift_pattern.length} {tx("diensten","shifts")}</option>)}</select></label>
+        <label>{tx("Aantal weken","Number of weeks")}<input type="number" min="1" max="52" value={templateRepeats} onChange={event=>setTemplateRepeats(Math.max(1,Math.min(52,Number(event.target.value)||1)))}/></label>
+        <button type="button" className="primary" disabled={busy||!templateId} onClick={()=>void templateMutate("template_apply")}>{templateRepeats>1?tx("Terugkerende diensten maken","Create recurring shifts"):tx("Template toepassen","Apply template")}</button>
       </section>
       <section className="roster-kpis">
         <article>
@@ -559,7 +613,9 @@ export function RosterBoard({
           <em>→</em>
         </button>
       ) : null}
-      <section
+      {view==="day"?<section className="day-planner" aria-label={tx("Dagrooster op servicetijdlijn","Day roster on service timeline")}><header><div><span className="eyebrow">{tx("DAGWEERGAVE","DAY VIEW")}</span><h3>{weekStart.toLocaleDateString(locale==="nl"?"nl-NL":"en-GB",{weekday:"long",day:"numeric",month:"long"})}</h3></div><small>{tx("Service-uren · vraag, pauzes en bezetting","Service hours · demand, breaks and staffing")}</small></header><div className="service-timeline">{Array.from({length:16},(_,index)=>index+12).map(hour=><div className="timeline-hour" key={hour}><b>{String(hour%24).padStart(2,"0")}:00</b><div>{visibleIntervals.filter(interval=>new Date(interval.starts_at).getHours()===hour%24).map(interval=><span className="demand-marker" key={interval.id}>{tx("nodig","required")} {interval.required_staff}</span>)}{visibleShifts.filter(shift=>new Date(shift.starts_at).toDateString()===weekStart.toDateString()&&new Date(shift.starts_at).getHours()===hour%24).map(shift=><button type="button" key={shift.id} className="timeline-shift" onClick={()=>{setSelected(shift);setPanel("shift")}}><b>{staff.find(person=>person.id===shift.staff_id)?.full_name??tx("Open dienst","Open shift")}</b><span>{new Date(shift.starts_at).toLocaleTimeString(locale==="nl"?"nl-NL":"en-GB",{hour:"2-digit",minute:"2-digit"})}–{new Date(shift.ends_at).toLocaleTimeString(locale==="nl"?"nl-NL":"en-GB",{hour:"2-digit",minute:"2-digit"})}</span>{visibleBreakPlans.some(plan=>plan.shift_id===shift.id)?<small>{tx("Pauze gepland","Break planned")}</small>:null}</button>)}</div></div>)}</div></section>:null}
+      {view==="month"?<section className="month-planner" aria-label={tx("Beknopt maandrooster","Concise monthly roster")}><header><div><span className="eyebrow">{tx("MAANDWEERGAVE","MONTH VIEW")}</span><h3>{weekStart.toLocaleDateString(locale==="nl"?"nl-NL":"en-GB",{month:"long",year:"numeric"})}</h3></div></header><div className="month-grid">{Array.from({length:35},(_,index)=>{const first=new Date(weekStart.getFullYear(),weekStart.getMonth(),1);const gridStart=monday(first);const day=new Date(gridStart.getTime()+index*dayMs);const rows=shifts.filter(shift=>shift.venue_id===venueId&&shift.status!=="cancelled"&&new Date(shift.starts_at).toDateString()===day.toDateString());const requirement=intervals.filter(interval=>interval.venue_id===venueId&&new Date(interval.starts_at).toDateString()===day.toDateString()).reduce((max,row)=>Math.max(max,row.required_staff),0);return <button type="button" className={day.getMonth()===weekStart.getMonth()?"":"outside"} key={day.toISOString()} onClick={()=>{setWeekStart(day);setView("day")}}><b>{day.getDate()}</b><span>{rows.length} {tx("diensten","shifts")}</span>{requirement?<small>{tx("piek nodig","peak required")} {requirement}</small>:<small>{tx("geen vraagbewijs","no demand evidence")}</small>}</button>})}</div></section>:null}
+      {view==="week"?<section
         className="roster-board"
         aria-label={tx("Visueel weekrooster", "Visual weekly roster")}
       >
@@ -600,6 +656,7 @@ export function RosterBoard({
                   <div>
                     <b>{person.full_name}</b>
                     <small>{person.role_name}</small>
+                    {person.id!=="open"?<small>{Math.round(visibleShifts.filter(shift=>shift.staff_id===person.id).reduce((sum,shift)=>sum+Math.max(0,(new Date(shift.ends_at).getTime()-new Date(shift.starts_at).getTime())/60000-shift.break_minutes),0)/60*10)/10}h / {person.contracted_minutes_week==null?"—":`${Math.round(person.contracted_minutes_week/6)/10}h`}</small>:null}
                   </div>
                 </div>
                 {days.map((day) => {
@@ -638,11 +695,12 @@ export function RosterBoard({
                           onDragStart={(event) =>
                             event.dataTransfer.setData("text/shift-id", row.id)
                           }
-                          onClick={() => {
-                            setSelected(row);
-                            setPanel("shift");
+                          onClick={(event) => {
+                            if(event.metaKey||event.ctrlKey||selectedIds.length){setSelectedIds(current=>current.includes(row.id)?current.filter(id=>id!==row.id):[...current,row.id]);return}
+                            setSelected(row);setPanel("shift");
                           }}
-                          className={`shift-card ${row.status}`}
+                          className={`shift-card ${row.status} ${selectedIds.includes(row.id)?"selected":""} ${row.locked?"locked":""}`}
+                          aria-pressed={selectedIds.includes(row.id)}
                           key={row.id}
                         >
                           <b>
@@ -664,6 +722,7 @@ export function RosterBoard({
                             {row.break_minutes
                               ? `${row.break_minutes}m ${tx("pauze", "break")}`
                               : ""}
+                            {row.locked?` · ${tx("vergrendeld","locked")}`:""}
                           </small>
                         </button>
                       ))}
@@ -686,7 +745,7 @@ export function RosterBoard({
             ))}
           </div>
         ))}
-      </section>
+      </section>:null}
       {panel ? (
         <div className="side-panel-backdrop" onClick={() => setPanel(null)}>
           <aside

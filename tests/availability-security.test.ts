@@ -18,4 +18,11 @@ describe("availability request security",()=>{
       {startsAt:"2026-08-01T17:00:00Z",endsAt:"2026-08-01T20:00:00Z",availability:"unavailable"},
     ],periodStart,periodEnd)).toThrow();
   });
+  it("accepts multiple non-overlapping windows and overnight services",()=>{
+    const entries=validateAvailabilityEntries([
+      {startsAt:"2026-08-01T18:00:00Z",endsAt:"2026-08-01T21:00:00Z",availability:"preferred"},
+      {startsAt:"2026-08-01T23:00:00Z",endsAt:"2026-08-02T04:00:00Z",availability:"available"},
+    ],"2026-08-01T00:00:00Z","2026-08-08T00:00:00Z");
+    expect(entries).toHaveLength(2);expect(entries[1].endsAt).toBe("2026-08-02T04:00:00Z");
+  });
 });

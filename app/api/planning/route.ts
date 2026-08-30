@@ -11,7 +11,7 @@ import {calculateCoverage,simulateDemand} from "../../../lib/workforce/decision-
 const envelope=z.object({
   organisationId:z.string().uuid(),
   locale:z.enum(["nl-NL","en-US"]).default("nl-NL"),
-  action:z.enum(["department","role","forecast","shift","shift_update","shift_cancel","shift_duplicate","shift_lock","break_plan","copy_week","staff","staff_deactivate","absence","absence_decide","publish","availability","proposal","proposal_apply","scenario","resolve_action"]),
+  action:z.enum(["department","role","forecast","shift","shift_update","shift_cancel","shift_duplicate","shift_lock","shift_bulk","planner_history","template_save","template_apply","break_plan","copy_week","staff","staff_deactivate","absence","absence_decide","publish","availability","proposal","proposal_apply","scenario","resolve_action"]),
   values:z.record(z.string(),z.string()),
 });
 const departmentSchema=z.object({venueId:z.string().uuid(),name:z.string().trim().min(2).max(100)});
@@ -22,6 +22,10 @@ const shiftUpdateSchema=shiftSchema.extend({shiftId:z.string().uuid(),expectedRe
 const shiftCancelSchema=z.object({venueId:z.string().uuid(),shiftId:z.string().uuid()});
 const shiftLockSchema=z.object({venueId:z.string().uuid(),shiftId:z.string().uuid(),locked:z.enum(["true","false"]),expectedRevision:z.coerce.number().int().positive()});
 const shiftDuplicateSchema=z.object({venueId:z.string().uuid(),shiftId:z.string().uuid(),idempotencyKey:z.string().uuid()});
+const shiftBulkSchema=z.object({venueId:z.string().uuid(),shiftIds:z.string().transform(value=>z.array(z.string().uuid()).min(1).max(100).parse(JSON.parse(value))),expectedRevisions:z.string().transform(value=>z.record(z.string().uuid(),z.number().int().positive()).parse(JSON.parse(value))),operation:z.enum(["cancel","lock","unlock","assign","role"]),staffId:z.string().uuid().optional(),roleId:z.string().uuid().optional(),idempotencyKey:z.string().uuid()});
+const plannerHistorySchema=z.object({venueId:z.string().uuid(),changeSetId:z.string().uuid(),direction:z.enum(["undo","redo"])});
+const templateSaveSchema=z.object({venueId:z.string().uuid(),name:z.string().trim().min(2).max(100),shiftIds:z.string().transform(value=>z.array(z.string().uuid()).min(1).max(200).parse(JSON.parse(value)))});
+const templateApplySchema=z.object({venueId:z.string().uuid(),templateId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),repeatCount:z.coerce.number().int().min(1).max(52),idempotencyKey:z.string().uuid()});
 const breakPlanSchema=z.object({venueId:z.string().uuid(),shiftId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true})});
 const copyWeekSchema=z.object({venueId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),idempotencyKey:z.string().uuid()});
 const staffSchema=z.object({venueId:z.string().uuid(),fullName:z.string().trim().min(2).max(140),email:z.union([z.literal(""),z.email()]),phone:z.string().trim().max(40),roleName:z.string().trim().min(2).max(100),engagementType:z.enum(["employee","contractor","temporary"]),preferredLanguage:z.enum(["nl","en"])});
@@ -101,6 +105,31 @@ export async function POST(request:Request){
       const values=shiftLockSchema.parse(input.values);const {supabase}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
       const {data,error}=await supabase.from("shifts").update({locked:values.locked==="true",revision:values.expectedRevision+1,updated_at:new Date().toISOString()}).eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).eq("id",values.shiftId).eq("revision",values.expectedRevision).select("id").single();if(error||!data)throw error??new Error("CONCURRENT_SHIFT_EDIT");
       return NextResponse.json({message:values.locked==="true"?"Dienst vergrendeld tegen roosterwijzigingen.":"Dienst ontgrendeld."});
+    }
+    if(input.action==="shift_bulk"){
+      const values=shiftBulkSchema.parse(input.values);
+      const {supabase}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
+      const {data,error}=await supabase.rpc("mutate_roster_shifts" as "clock_out",{target_organisation_id:input.organisationId,target_venue_id:values.venueId,target_shift_ids:values.shiftIds,target_expected_revisions:values.expectedRevisions,target_operation:values.operation,target_staff_id:values.staffId??null,target_role_id:values.roleId??null,target_idempotency_key:values.idempotencyKey} as never);
+      if(error)throw error;
+      const result=data as unknown as {changed?:number;change_set_id?:string;replayed?:boolean};
+      return NextResponse.json({message:result.replayed?"Deze wijziging was al verwerkt.":`${result.changed??0} dienst(en) bijgewerkt.`,changeSetId:result.change_set_id,replayed:result.replayed});
+    }
+    if(input.action==="planner_history"){
+      const values=plannerHistorySchema.parse(input.values);
+      const {supabase}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
+      const {data,error}=await supabase.rpc("replay_roster_change" as "clock_out",{target_organisation_id:input.organisationId,target_change_set_id:values.changeSetId,target_direction:values.direction} as never);
+      if(error)throw error;
+      return NextResponse.json({message:values.direction==="undo"?"Laatste roosterwijziging ongedaan gemaakt.":"Roosterwijziging opnieuw toegepast.",changeSet:data});
+    }
+    if(input.action==="template_save"){
+      const values=templateSaveSchema.parse(input.values);const {supabase}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
+      const {data,error}=await supabase.rpc("save_roster_template" as "clock_out",{target_organisation_id:input.organisationId,target_venue_id:values.venueId,target_name:values.name,target_shift_ids:values.shiftIds} as never);if(error)throw error;
+      return NextResponse.json({message:"Roostertemplate met relatieve diensttijden opgeslagen.",template:data},{status:201});
+    }
+    if(input.action==="template_apply"){
+      const values=templateApplySchema.parse(input.values);const {supabase}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
+      const {data,error}=await supabase.rpc("apply_roster_template" as "clock_out",{target_organisation_id:input.organisationId,target_template_id:values.templateId,target_starts_at:iso(values.startsAt),target_repeat_count:values.repeatCount,target_idempotency_key:values.idempotencyKey} as never);if(error)throw error;
+      return NextResponse.json({message:`${(data as unknown as {created?:number})?.created??0} conceptdienst(en) vanuit template gemaakt.`,result:data},{status:201});
     }
     if(input.action==="shift_duplicate"){
       const values=shiftDuplicateSchema.parse(input.values);const {supabase,user}=await requireMembership(input.organisationId,"planning.manage",values.venueId);const receipt=`shift-duplicate:${input.organisationId}:${values.idempotencyKey}`;

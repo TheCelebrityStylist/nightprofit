@@ -47,21 +47,20 @@ export function AvailabilityResponse({
     return result;
   }, [periodStart, periodEnd, venueTimezone]);
   const [entries, setEntries] = useState<Entry[]>(() =>
-    days.map((day) => {
-      const saved = initialEntries.find(
+    days.flatMap((day) => {
+      const savedRows = initialEntries.filter(
         (row) => utcToZonedInput(row.starts_at, venueTimezone).slice(0, 10) === day,
       );
       const next = new Date(`${day}T12:00:00.000Z`);
       next.setUTCDate(next.getUTCDate() + 1);
-      return {
+      if(savedRows.length)return savedRows.map(saved=>({day,startsAt:utcToZonedInput(saved.starts_at,venueTimezone),endsAt:utcToZonedInput(saved.ends_at,venueTimezone),availability:saved.availability,note:saved.note??""}));
+      return [{
         day,
-        startsAt: saved ? utcToZonedInput(saved.starts_at, venueTimezone) : `${day}T18:00`,
-        endsAt: saved
-          ? utcToZonedInput(saved.ends_at, venueTimezone)
-          : `${next.toISOString().slice(0, 10)}T05:00`,
-        availability: saved?.availability ?? "unknown",
-        note: saved?.note ?? "",
-      };
+        startsAt: `${day}T18:00`,
+        endsAt: `${next.toISOString().slice(0, 10)}T05:00`,
+        availability: "unknown" as State,
+        note: "",
+      }];
     }),
   );
   const [review, setReview] = useState(false),
@@ -72,8 +71,11 @@ export function AvailabilityResponse({
     setEntries((current) =>
       current.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)),
     );
+  const addWindow=(index:number)=>setEntries(current=>{const source=current[index],end=new Date(zonedInputToUtc(source.endsAt,venueTimezone)),nextEnd=new Date(end.getTime()+2*3600000);return [...current.slice(0,index+1),{...source,startsAt:utcToZonedInput(end.toISOString(),venueTimezone),endsAt:utcToZonedInput(nextEnd.toISOString(),venueTimezone),note:""},...current.slice(index+1)]});
+  const removeWindow=(index:number)=>setEntries(current=>current.filter((_,entryIndex)=>entryIndex!==index));
   const copyPreviousDay = (index: number) => {
-    const previous = entries[index - 1];
+    const previous = entries.slice(0,index).reverse().find(entry=>entry.day!==entries[index].day);
+    if(!previous)return;
     const start = `${entries[index].day}${previous.startsAt.slice(10)}`;
     const duration =
       new Date(zonedInputToUtc(previous.endsAt, venueTimezone)).getTime() -
@@ -189,7 +191,7 @@ export function AvailabilityResponse({
         {!review ? (
           <><div className="availability-quick-actions" aria-label={tx("Snelle invoer","Quick entry")}><b>{entries.filter(entry=>entry.availability==="unknown").length} {tx("dagen open","days unresolved")}</b><button type="button" onClick={()=>setEntries(current=>current.map(entry=>({...entry,availability:"available"})))}>{tx("Beschikbaar tijdens alle openingstijden","Available for all opening hours")}</button><button type="button" disabled={!entries.some(entry=>entry.availability!=="unknown")} onClick={applyFirstAnsweredToUnresolved}>{tx("Pas eerste antwoord toe op open dagen","Apply first answer to unresolved days")}</button><button type="button" onClick={()=>setEntries(current=>current.map(entry=>({...entry,availability:"unavailable"})))}>{tx("Alles niet beschikbaar","Mark all unavailable")}</button></div><div className="availability-days">
             {entries.map((entry, index) => (
-              <fieldset key={entry.day}>
+              <fieldset key={`${entry.day}-${index}`}>
                 <legend>
                   {new Date(`${entry.day}T12:00:00Z`).toLocaleDateString(locale, {
                     weekday: "long",
@@ -239,7 +241,7 @@ export function AvailabilityResponse({
                     onChange={(event) => update(index, { note: event.target.value })}
                   />
                 </label>
-                {index > 0 ? (
+                {entries.slice(0,index).some(candidate=>candidate.day!==entry.day) ? (
                   <button
                     type="button"
                     className="ghost"
@@ -248,13 +250,15 @@ export function AvailabilityResponse({
                     {tx("Kopieer vorige dag", "Copy previous day")}
                   </button>
                 ) : null}
+                <button type="button" className="ghost" disabled={entry.availability==="unknown"} onClick={()=>addWindow(index)}>{tx("Tijdvenster toevoegen","Add time window")}</button>
+                {entries.filter(candidate=>candidate.day===entry.day).length>1?<button type="button" className="ghost" onClick={()=>removeWindow(index)}>{tx("Tijdvenster verwijderen","Remove time window")}</button>:null}
               </fieldset>
             ))}
           </div></>
         ) : (
           <div className="availability-review">
-            {entries.map((entry) => (
-              <div className={entry.availability === "unknown" ? "unanswered" : ""} key={entry.day}>
+            {entries.map((entry,index) => (
+              <div className={entry.availability === "unknown" ? "unanswered" : ""} key={`${entry.day}-${index}`}>
                 <b>
                   {new Date(`${entry.day}T12:00:00Z`).toLocaleDateString(locale, {
                     weekday: "long",
