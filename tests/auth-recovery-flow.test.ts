@@ -8,6 +8,7 @@ const updateRoute = readFileSync(new URL("../app/api/auth/update/route.ts", impo
 const updatePage = readFileSync(new URL("../app/update-password/page.tsx", import.meta.url), "utf8");
 const form = readFileSync(new URL("../app/auth-form.tsx", import.meta.url), "utf8");
 const sessionRoute = readFileSync(new URL("../app/api/auth/session/route.ts", import.meta.url), "utf8");
+const forgotRoute = readFileSync(new URL("../app/api/auth/forgot/route.ts", import.meta.url), "utf8");
 const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
 
 describe("Supabase activation and recovery contracts", () => {
@@ -29,6 +30,13 @@ describe("Supabase activation and recovery contracts", () => {
     expect(sessionRoute).toContain("supabase.auth.setSession");
     expect(sessionRoute).toContain("supabase.auth.getUser()");
     expect(sessionRoute).not.toMatch(/console\.(?:log|warn|error)/);
+  });
+
+  it("creates recovery links that land on the fragment-session password page", () => {
+    expect(forgotRoute).toContain("createSupabaseCredentialClient");
+    expect(forgotRoute).toContain('redirectTo:`${origin}/update-password`');
+    expect(forgotRoute).not.toContain("/auth/callback?next=/update-password");
+    expect(forgotRoute).toContain("if(error)");
   });
 
   it.each(["missing", "invalid", "expired", "reused", "missing PKCE verifier"]) (
