@@ -7,11 +7,12 @@ import {assertSameOrigin,securityErrorResponse} from "../../../lib/http/security
 import {rankSchedulingCandidates,type RosterObjective,type AvailabilityState} from "../../../lib/workforce/maestro";
 import {normalizeDutchPhone} from "../../../lib/workforce/domain";
 import {calculateCoverage,simulateDemand} from "../../../lib/workforce/decision-support";
+import {createStaffOnboardingToken,hashStaffOnboardingToken,onboardingMessage} from "../../../lib/workforce/onboarding";
 
 const envelope=z.object({
   organisationId:z.string().uuid(),
   locale:z.enum(["nl-NL","en-US"]).default("nl-NL"),
-  action:z.enum(["department","role","forecast","shift","shift_update","shift_cancel","shift_duplicate","shift_lock","shift_bulk","planner_history","template_save","template_apply","break_plan","copy_week","staff","staff_deactivate","absence","absence_decide","publish","availability","proposal","proposal_apply","scenario","resolve_action"]),
+  action:z.enum(["department","role","forecast","shift","shift_update","shift_cancel","shift_duplicate","shift_lock","shift_bulk","planner_history","template_save","template_apply","break_plan","copy_week","staff","invitation_state","staff_deactivate","absence","absence_decide","swap_decide","publish","availability","proposal","proposal_apply","scenario","resolve_action"]),
   values:z.record(z.string(),z.string()),
 });
 const departmentSchema=z.object({venueId:z.string().uuid(),name:z.string().trim().min(2).max(100)});
@@ -28,10 +29,12 @@ const templateSaveSchema=z.object({venueId:z.string().uuid(),name:z.string().tri
 const templateApplySchema=z.object({venueId:z.string().uuid(),templateId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),repeatCount:z.coerce.number().int().min(1).max(52),idempotencyKey:z.string().uuid()});
 const breakPlanSchema=z.object({venueId:z.string().uuid(),shiftId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true})});
 const copyWeekSchema=z.object({venueId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),idempotencyKey:z.string().uuid()});
-const staffSchema=z.object({venueId:z.string().uuid(),fullName:z.string().trim().min(2).max(140),email:z.union([z.literal(""),z.email()]),phone:z.string().trim().max(40),roleName:z.string().trim().min(2).max(100),engagementType:z.enum(["employee","contractor","temporary"]),preferredLanguage:z.enum(["nl","en"])});
+const staffSchema=z.object({venueId:z.string().uuid(),departmentId:z.string().uuid(),roleId:z.string().uuid(),fullName:z.string().trim().min(2).max(140),email:z.union([z.literal(""),z.email()]),phone:z.string().trim().min(8).max(40),accessRole:z.literal("employee"),engagementType:z.enum(["employee","contractor","temporary"]),preferredLanguage:z.enum(["nl","en"])});
 const staffDeactivateSchema=z.object({staffId:z.string().uuid()});
+const invitationStateSchema=z.object({venueId:z.string().uuid(),invitationId:z.string().uuid(),state:z.enum(["opened_in_whatsapp","copied"])});
 const absenceSchema=z.object({venueId:z.string().uuid(),staffId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),absenceType:z.enum(["leave","sickness","other"]),note:z.string().trim().max(500)});
 const absenceDecisionSchema=z.object({venueId:z.string().uuid(),absenceId:z.string().uuid(),decision:z.enum(["approved","rejected"])});
+const swapDecisionSchema=z.object({venueId:z.string().uuid(),swapId:z.string().uuid(),decision:z.enum(["approved","rejected"]),reason:z.string().trim().min(3).max(1000)});
 const publishSchema=z.object({venueId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),expectedRevision:z.coerce.number().int().positive(),idempotencyKey:z.string().uuid()});
 const availabilitySchema=z.object({venueId:z.string().uuid(),staffId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),availability:z.enum(["available","preferred","unavailable"]),note:z.string().trim().max(500).default("")});
 const proposalSchema=z.object({venueId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true})});
@@ -179,13 +182,19 @@ export async function POST(request:Request){
       const duplicateError=duplicates.find(result=>result.error)?.error;
       if(duplicateError)throw duplicateError;
       if(duplicates.some(result=>result.data?.length))return NextResponse.json({errorCode:"DUPLICATE_STAFF"},{status:409});
-      const {data,error}=await supabase.from("staff_profiles").insert({organisation_id:input.organisationId,full_name:values.fullName,contact_email:email,contact_phone:phone,preferred_language:values.preferredLanguage,engagement_type:values.engagementType,role_name:values.roleName,onboarding_status:"invited"}).select("id").single();
-      if(error||!data)throw error??new Error("STAFF_CREATE_FAILED");
-      const assignments=supabase.from("staff_venue_assignments") as unknown as {insert:(value:Record<string,unknown>)=>Promise<{error:unknown}>};
-      const {error:assignmentError}=await assignments.insert({organisation_id:input.organisationId,staff_id:data.id,venue_id:values.venueId});
-      if(assignmentError)throw assignmentError;
-      await supabase.from("audit_logs").insert({organisation_id:input.organisationId,venue_id:values.venueId,actor_id:user.id,action:"staff.created",entity_type:"staff_profile",entity_id:data.id,after_summary:{engagement_type:values.engagementType,role_name:values.roleName},correlation_id:crypto.randomUUID(),source:"planning_api"});
-      return NextResponse.json({message:"Medewerker toegevoegd. Verstuur daarna een beveiligde beschikbaarheidsuitnodiging."},{status:201});
+      const [{data:role},{data:organisation}]=await Promise.all([supabase.from("operational_roles").select("id,name,department_id").eq("organisation_id",input.organisationId).eq("id",values.roleId).eq("department_id",values.departmentId).single(),supabase.from("organisations").select("name").eq("id",input.organisationId).single()]);
+      if(!role||!organisation)throw new Error("INVALID_TEAM_ASSIGNMENT");
+      const rawToken=createStaffOnboardingToken(),tokenHash=hashStaffOnboardingToken(rawToken),link=`${new URL(request.url).origin}/employee-onboarding/${rawToken}`;
+      const {data,error}=await supabase.rpc("create_invited_staff" as "clock_out",{target_organisation_id:input.organisationId,target_venue_id:values.venueId,target_department_id:values.departmentId,target_role_id:values.roleId,target_full_name:values.fullName,target_email:email??"",target_phone:phone,target_language:values.preferredLanguage,target_engagement_type:values.engagementType,target_token_hash:tokenHash,target_expires_at:new Date(Date.now()+7*86400000).toISOString()} as never);if(error||!data)throw error??new Error("STAFF_CREATE_FAILED");
+      const created=data as unknown as {staff_id:string;invitation_id:string},staffId=created.staff_id;
+      const invitationMessage=onboardingMessage(values.preferredLanguage,values.fullName,String(organisation.name),link),whatsappUrl=`https://wa.me/${phone!.replace("+","")}?text=${encodeURIComponent(invitationMessage)}`;
+      await supabase.from("audit_logs").insert({organisation_id:input.organisationId,venue_id:values.venueId,actor_id:user.id,action:"staff.created",entity_type:"staff_profile",entity_id:staffId,after_summary:{engagement_type:values.engagementType,role_name:String(role.name),delivery_state:"prepared"},correlation_id:crypto.randomUUID(),source:"planning_api"});
+      return NextResponse.json({message:"Medewerker en beveiligde onboardinguitnodiging opgeslagen.",invitation:{id:created.invitation_id,link,message:invitationMessage,whatsappUrl,deliveryState:"prepared",providerConnected:false}},{status:201});
+    }
+    if(input.action==="invitation_state"){
+      const values=invitationStateSchema.parse(input.values);const {supabase}=await requireMembership(input.organisationId,"members.manage",values.venueId);
+      const {data,error}=await supabase.from("staff_onboarding_invitations").update({message_state:values.state,updated_at:new Date().toISOString()}).eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).eq("id",values.invitationId).is("claimed_at",null).is("revoked_at",null).select("id").single();if(error||!data)throw error??new Error("INVITATION_NOT_FOUND");
+      return NextResponse.json({message:values.state==="copied"?"Handmatig kopiëren vastgelegd.":"Openen in WhatsApp vastgelegd."});
     }
     if(input.action==="staff_deactivate"){
       const values=staffDeactivateSchema.parse(input.values);
@@ -206,6 +215,11 @@ export async function POST(request:Request){
       const {supabase,user}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
       const {data,error}=await supabase.from("staff_absences").update({status:values.decision,reviewed_by:user.id,reviewed_at:new Date().toISOString()}).eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).eq("id",values.absenceId).select("id").single();if(error||!data)throw error??new Error("ABSENCE_NOT_FOUND");
       return NextResponse.json({message:"Verlofbesluit opgeslagen; dekking is opnieuw beoordeeld."});
+    }
+    if(input.action==="swap_decide"){
+      const values=swapDecisionSchema.parse(input.values);const {supabase}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
+      const {data,error}=await supabase.rpc("decide_shift_swap" as "clock_out",{target_organisation_id:input.organisationId,target_swap_id:values.swapId,target_approve:values.decision==="approved",target_reason:values.reason} as never);if(error)throw error;
+      return NextResponse.json({message:values.decision==="approved"?"Ruil goedgekeurd en als onveranderlijke opvolgversie gepubliceerd.":"Ruilverzoek afgewezen en geaudit.",result:data});
     }
     if(input.action==="publish"){
       const values=publishSchema.parse(input.values);

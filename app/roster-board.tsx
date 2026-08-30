@@ -24,8 +24,13 @@ type Staff = {
   role_name: string;
   onboarding_status?: string;
   contact_email?: string | null;
+  contact_phone?:string|null;
+  preferred_language?:string;
+  employment_status?:string;
+  invitation_state?:string;
   effective_hourly_cost_minor?: string | null;
   contracted_minutes_week?: number | null;
+  minimum_minutes_week?:number|null;
   maximum_minutes_week?: number | null;
   preferences?: Record<string,unknown>;
 };
@@ -34,6 +39,7 @@ type Qualification={staff_id:string;role_id:string;qualified_until:string|null};
 type TimeRecord={id:string;venue_id:string;staff_id:string;shift_id:string|null;clocked_in_at:string;clocked_out_at:string|null;break_minutes:number;status:string;approved_at:string|null};
 type BreakPlan={id:string;venue_id:string;shift_id:string;starts_at:string;ends_at:string;status:string;revision:number};
 type RosterTemplate={id:string;venue_id:string;name:string;shift_pattern:unknown[];active:boolean};
+type SwapRequest={id:string;venue_id:string;shift_id:string;requester_staff_id:string;candidate_staff_id:string;state:string;reason:string|null;cost_effect_minor:string|null;created_at:string};
 type Interval = {
   id: string;
   venue_id: string;
@@ -109,6 +115,7 @@ export function RosterBoard({
   timeRecords,
   breakPlans,
   rosterTemplates,
+  swaps,
   proposals,
 }: {
   organisationId: string;
@@ -124,6 +131,7 @@ export function RosterBoard({
   timeRecords: TimeRecord[];
   breakPlans: BreakPlan[];
   rosterTemplates: RosterTemplate[];
+  swaps:SwapRequest[];
   proposals: Proposal[];
 }) {
   const { locale } = useAuthLocale(),
@@ -262,7 +270,7 @@ export function RosterBoard({
           values,
         }),
       });
-      const result = (await response.json()) as { message?: string; errorCode?: string };
+      const result = (await response.json()) as { message?: string; errorCode?: string; invitation?:{id:string;link:string;message:string;whatsappUrl:string;deliveryState:string;providerConnected:boolean} };
       if (!response.ok) {
         const errorMessage = result.errorCode === "SHIFT_OVERLAP"
           ? tx("Deze medewerker heeft al een overlappende dienst.", "This employee already has an overlapping shift.")
@@ -274,11 +282,13 @@ export function RosterBoard({
       optimistic?.();
       setMessage(result.message ?? tx("Opgeslagen.", "Saved."));
       router.refresh();
+      return result;
     } catch (error) {
       setMessage(error instanceof Error ? error.message : tx("Opslaan mislukt.", "Save failed."));
     } finally {
       setBusy(false);
     }
+    return undefined;
   }
   async function workforceMutate(action:string,values:Record<string,string>){
     setBusy(true);setMessage("");try{const response=await fetch("/api/workforce",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({organisationId,action,values})});const result=await response.json() as {message?:string};if(!response.ok)throw new Error(tx("De urenactie kon niet worden opgeslagen.","The hours action could not be saved."));setMessage(result.message??tx("Opgeslagen.","Saved."));router.refresh()}catch(error){setMessage(error instanceof Error?error.message:tx("Opslaan mislukt.","Save failed."))}finally{setBusy(false)}
@@ -522,7 +532,7 @@ export function RosterBoard({
           <small>{tx("toewijzing nodig", "need assignment")}</small>
         </article>
       </section>
-      {(sicknessCases.length||coverageIntervals.some(row=>row.gap))?<section className="workforce-inbox" aria-label={tx("Beslissingen voor manager","Manager decision inbox")}><header><div><span className="eyebrow">{tx("BESLISSINGEN","DECISIONS")}</span><h3>{tx("Wat nu aandacht nodig heeft","What needs attention now")}</h3></div><b>{sicknessCases.length+coverageIntervals.filter(row=>row.gap).length}</b></header>{sicknessCases.map(({absence,shift,replacements})=><article key={`${absence.id}-${shift.id}`}><div><strong>{tx("Ziekte raakt geplande dienst","Sickness affects scheduled shift")}</strong><span>{staff.find(person=>person.id===absence.staff_id)?.full_name} · {new Date(shift.starts_at).toLocaleString(locale==="nl"?"nl-NL":"en-GB",{weekday:"short",hour:"2-digit",minute:"2-digit"})}</span><small>{replacements.length?tx("Vervangers gerangschikt op voorkeur, kosten en uren.","Replacements ranked by preference, cost and hours."):tx("Geen volledig geldige vervanger; bied een open dienst aan.","No fully valid replacement; offer an open shift.")}</small></div>{replacements.slice(0,3).map((candidate,index)=><button type="button" key={candidate.staffId} className={index===0?"primary":"secondary"} disabled={busy} onClick={()=>{const values=shiftValues({...shift,staff_id:candidate.staffId});void mutate("shift_update",values,()=>setShifts(current=>current.map(row=>row.id===shift.id?{...shift,staff_id:candidate.staffId,status:"draft",revision:(shift.revision??1)+1}:row)))}}><b>{staff.find(person=>person.id===candidate.staffId)?.full_name}</b><small>{candidate.preferred?tx("voorkeur","preferred"):tx("beschikbaar","available")} · {candidate.costDifferenceMinor>=0n?"+":"−"}{currency(candidate.costDifferenceMinor<0n?-candidate.costDifferenceMinor:candidate.costDifferenceMinor)}</small></button>)}</article>)}{coverageIntervals.filter(row=>row.gap).slice(0,3).map(row=><button type="button" className="inbox-gap" key={row.id} onClick={()=>{if(venueDepartments[0]){setNewShift({day:new Date(row.startsAt),departmentId:venueDepartments[0].id,staffId:"open"});setPanel("new")}}}><span>{tx("Dekkingsgat","Coverage gap")}</span><b>{row.gap} · {new Date(row.startsAt).toLocaleTimeString(locale==="nl"?"nl-NL":"en-GB",{hour:"2-digit",minute:"2-digit"})}</b><em>→</em></button>)}</section>:null}
+      {(sicknessCases.length||coverageIntervals.some(row=>row.gap)||swaps.some(row=>row.venue_id===venueId))?<section className="workforce-inbox" aria-label={tx("Beslissingen voor manager","Manager decision inbox")}><header><div><span className="eyebrow">{tx("BESLISSINGEN","DECISIONS")}</span><h3>{tx("Wat nu aandacht nodig heeft","What needs attention now")}</h3></div><b>{sicknessCases.length+coverageIntervals.filter(row=>row.gap).length+swaps.filter(row=>row.venue_id===venueId).length}</b></header>{swaps.filter(row=>row.venue_id===venueId).map(swap=><article key={swap.id}><div><strong>{tx("Gecontroleerd ruilverzoek","Controlled shift swap")}</strong><span>{staff.find(person=>person.id===swap.requester_staff_id)?.full_name} → {staff.find(person=>person.id===swap.candidate_staff_id)?.full_name}</span><small>{swap.state==="candidate_accepted"?tx("Collega heeft ingestemd; harde regels worden opnieuw gecontroleerd bij goedkeuring.","Colleague consented; hard rules are revalidated on approval."):tx("Wacht op instemming van de voorgestelde collega.","Waiting for the proposed colleague's consent.")}</small></div><button type="button" className="primary" disabled={busy||swap.state!=="candidate_accepted"} onClick={()=>void mutate("swap_decide",{venueId,swapId:swap.id,decision:"approved",reason:tx("Goedgekeurd na hercontrole van dekking en regels","Approved after coverage and rule revalidation")})}>{tx("Goedkeuren + opvolgversie","Approve + successor version")}</button><button type="button" disabled={busy} onClick={()=>void mutate("swap_decide",{venueId,swapId:swap.id,decision:"rejected",reason:tx("Afgewezen door manager","Rejected by manager")})}>{tx("Afwijzen","Reject")}</button></article>)}{sicknessCases.map(({absence,shift,replacements})=><article key={`${absence.id}-${shift.id}`}><div><strong>{tx("Ziekte raakt geplande dienst","Sickness affects scheduled shift")}</strong><span>{staff.find(person=>person.id===absence.staff_id)?.full_name} · {new Date(shift.starts_at).toLocaleString(locale==="nl"?"nl-NL":"en-GB",{weekday:"short",hour:"2-digit",minute:"2-digit"})}</span><small>{replacements.length?tx("Vervangers gerangschikt op voorkeur, kosten en uren.","Replacements ranked by preference, cost and hours."):tx("Geen volledig geldige vervanger; bied een open dienst aan.","No fully valid replacement; offer an open shift.")}</small></div>{replacements.slice(0,3).map((candidate,index)=><button type="button" key={candidate.staffId} className={index===0?"primary":"secondary"} disabled={busy} onClick={()=>{const values=shiftValues({...shift,staff_id:candidate.staffId});void mutate("shift_update",values,()=>setShifts(current=>current.map(row=>row.id===shift.id?{...shift,staff_id:candidate.staffId,status:"draft",revision:(shift.revision??1)+1}:row)))}}><b>{staff.find(person=>person.id===candidate.staffId)?.full_name}</b><small>{candidate.preferred?tx("voorkeur","preferred"):tx("beschikbaar","available")} · {candidate.costDifferenceMinor>=0n?"+":"−"}{currency(candidate.costDifferenceMinor<0n?-candidate.costDifferenceMinor:candidate.costDifferenceMinor)}</small></button>)}</article>)}{coverageIntervals.filter(row=>row.gap).slice(0,3).map(row=><button type="button" className="inbox-gap" key={row.id} onClick={()=>{if(venueDepartments[0]){setNewShift({day:new Date(row.startsAt),departmentId:venueDepartments[0].id,staffId:"open"});setPanel("new")}}}><span>{tx("Dekkingsgat","Coverage gap")}</span><b>{row.gap} · {new Date(row.startsAt).toLocaleTimeString(locale==="nl"?"nl-NL":"en-GB",{hour:"2-digit",minute:"2-digit"})}</b><em>→</em></button>)}</section>:null}
       <section className="roster-intelligence" aria-label={tx("Roosterkwaliteit en vraagdekking", "Roster health and demand coverage")}>
         <article className="roster-health">
           <header><div><span className="eyebrow">ROSTER HEALTH</span><h3>{health.publishable?tx("Geen blokkerende regels","No blocking rules"):tx("Actie vereist vóór publicatie","Action required before publishing")}</h3></div><b className={health.publishable?"health-ok":"health-blocked"}>{health.publishable?tx("Publiceerbaar","Publishable"):tx("Geblokkeerd","Blocked")}</b></header>
@@ -1121,9 +1131,10 @@ function TeamSetup({
   roles: Role[];
   staff: Staff[];
   busy: boolean;
-  mutate: (action: string, values: Record<string, string>) => Promise<void>;
+  mutate: (action: string, values: Record<string, string>) => Promise<{message?:string;errorCode?:string;invitation?:{id:string;link:string;message:string;whatsappUrl:string;deliveryState:string;providerConnected:boolean}}|undefined>;
   tx: (nl: string, en: string) => string;
 }) {
+  const [invitation,setInvitation]=useState<{id:string;link:string;message:string;whatsappUrl:string;deliveryState:string;providerConnected:boolean}|null>(null);
   return (
     <div>
       <h3>{tx("Team instellen", "Set up team")}</h3>
@@ -1189,15 +1200,17 @@ function TeamSetup({
       ) : (
         <form
           key="staff-setup"
-          onSubmit={(event) => {
+          onSubmit={async (event) => {
             event.preventDefault();
-            void mutate(
+            const result=await mutate(
               "staff",
               Object.fromEntries(new FormData(event.currentTarget)) as Record<string, string>,
             );
+            if(result?.invitation)setInvitation(result.invitation);
           }}
         >
           <input type="hidden" name="venueId" value={venueId} />
+          <input type="hidden" name="accessRole" value="employee" />
           <label>
             {tx("Naam", "Name")}
             <input name="fullName" required />
@@ -1210,10 +1223,9 @@ function TeamSetup({
             {tx("Telefoon", "Phone")}
             <input name="phone" type="tel" />
           </label>
-          <label>
-            {tx("Functie", "Role")}
-            <input name="roleName" required defaultValue={roles[0]?.name} />
-          </label>
+          <label>{tx("Team / afdeling","Team / department")}<select name="departmentId">{departments.map(department=><option key={department.id} value={department.id}>{department.name}</option>)}</select></label>
+          <label>{tx("Planningsrol","Planning role")}<select name="roleId">{roles.map(role=><option key={role.id} value={role.id}>{role.name}</option>)}</select></label>
+          <label>{tx("Toegang","Access role")}<input value={tx("Medewerker","Employee")} disabled/></label>
           <label>
             {tx("Contract", "Contract")}
             <select name="engagementType">
@@ -1234,13 +1246,15 @@ function TeamSetup({
           </button>
         </form>
       )}
+      {invitation?<section className="manual-invitation" aria-live="polite"><b>{tx("Beveiligde uitnodiging klaar","Secure invitation ready")}</b><p>{invitation.message}</p><small>{invitation.providerConnected?tx("Provider verbonden","Provider connected"):tx("Geen geverifieerde provider; handmatig delen","No verified provider; share manually")}</small><div><a className="primary" href={invitation.whatsappUrl} target="_blank" rel="noreferrer" onClick={()=>void mutate("invitation_state",{venueId,invitationId:invitation.id,state:"opened_in_whatsapp"})}>{tx("Open in WhatsApp","Open in WhatsApp")}</a><button type="button" onClick={()=>{void navigator.clipboard.writeText(invitation.message);void mutate("invitation_state",{venueId,invitationId:invitation.id,state:"copied"})}}>{tx("Kopieer bericht","Copy message")}</button><button type="button" onClick={()=>{void navigator.clipboard.writeText(invitation.link);void mutate("invitation_state",{venueId,invitationId:invitation.id,state:"copied"})}}>{tx("Kopieer link","Copy link")}</button></div></section>:null}
       <div className="team-list">
         {staff.map((person) => (
           <div key={person.id}>
             <span className="avatar">{person.full_name.slice(0, 2).toUpperCase()}</span>
             <div>
               <b>{person.full_name}</b>
-              <small>{person.role_name}</small>
+              <small>{person.role_name} · {person.invitation_state==="accepted"?tx("actief","active"):person.invitation_state==="pending"?tx("uitgenodigd","invited"):tx("profiel onvolledig","profile incomplete")}</small>
+              <small>{[person.contact_email,person.contact_phone,person.contracted_minutes_week!=null?tx("contract compleet","contract complete"):null].filter(Boolean).length}/3 {tx("profielonderdelen","profile fields")}</small>
             </div>
             <button
               disabled={busy}
@@ -1267,7 +1281,7 @@ function AbsencePanel({
   staff: Staff[];
   absences: Absence[];
   busy: boolean;
-  mutate: (action: string, values: Record<string, string>) => Promise<void>;
+  mutate: (action: string, values: Record<string, string>) => Promise<unknown>;
   tx: (nl: string, en: string) => string;
 }) {
   return (

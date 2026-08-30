@@ -10,7 +10,7 @@ This matrix is source-evidenced at checkpoint `300e673` and is updated as code-c
 | Multi-select, bulk edit, delete, undo and redo | Implemented; remote migration and authenticated acceptance pending | `20260729001600_visual_planner_history.sql`; atomic revision-guarded RPCs. |
 | Templates and recurring shifts | Implemented; remote migration and authenticated acceptance pending | Relative-time patterns, idempotent application and bounded weekly recurrence in `20260729001700_roster_templates.sql`. |
 | Draft-versus-published comparison | Partially implemented | Immutable snapshot exists; comparison UI is absent. |
-| WhatsApp-first employee invite | Partially implemented | Staff creation, normalized phone and manual availability sharing exist; secure onboarding message flow is incomplete. |
+| WhatsApp-first employee invite | Implemented; remote migration and authenticated acceptance pending | Atomic staff/team/role creation, 256-bit expiring invitation, employee-only activation, manual WhatsApp/copy state and bilingual messages in `20260729001800_employee_onboarding.sql`. Provider delivery remains honestly unavailable. |
 | Progressive employee record | Partially implemented | Core profile/contract/cost/qualification fields persist; editing multiple roles, supplements and certifications is incomplete. |
 | CSV import | Implemented; authenticated acceptance pending | Preview, validation, partial import, duplicate behavior and idempotent receipt exist. |
 | Availability request management | Partially implemented | Period, deadline, recipients, preview/manual share, reminders, extension and cancellation exist; provider send and richer recipient UI remain. |
@@ -21,7 +21,7 @@ This matrix is source-evidenced at checkpoint `300e673` and is updated as code-c
 | Immutable publication | Partially implemented | Idempotent, concurrent, immutable successor snapshots and server hard constraints exist; stale evidence, full preview and communication queue remain. |
 | Leave and sickness replacement | Partially implemented | Persistent requests/decisions and ranked replacements exist; split replacement/open-offer/successor communication loop remains. |
 | Open shifts | Partially implemented | Atomic claim RPC exists; manager lifecycle, expiry and successor publication acceptance remain. |
-| Controlled swaps | Not implemented | Table exists, but no complete operation or UI. |
+| Controlled swaps | Implemented; remote migration and authenticated acceptance pending | Employee proposal, scoped candidate list/consent, manager decision, hard-rule revalidation, cost comparison and immutable successor publication in `20260729001900_controlled_shift_swaps.sql`. |
 | Append-only attendance and corrections | Partially implemented | Clock/break/out events and correction/approval records exist; missed-event and full manager decision UI remain. |
 | Labour-to-close propagation | Partially implemented | Integer planned/actual labour calculations and close surfaces exist; approved-hours evidence propagation and locked learning need end-to-end acceptance. |
 | Workforce exception inbox and learning | Partially implemented | Coverage/sickness decisions are direct; unified ranked queue and evidence-backed comparable-service learning remain. |

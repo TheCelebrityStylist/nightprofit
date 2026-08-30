@@ -13,11 +13,13 @@ type Field = {
     | "number"
     | "date"
     | "datetime-local"
+    | "hidden"
     | "select"
     | "textarea";
   required?: boolean;
   options?: { label: string; value: string }[];
   placeholder?: string;
+  defaultValue?:string;
 };
 
 export function WorkflowForm({
@@ -79,7 +81,7 @@ export function WorkflowForm({
       <h3>{title}</h3>
       <div className="workflow-fields">
         {fields.map((field) => (
-          <label key={field.name}>
+          field.type==="hidden"?<input key={field.name} type="hidden" name={field.name} value={field.defaultValue??""}/>:<label key={field.name}>
             {field.label}
             {field.type === "select" ? (
               <select
@@ -110,6 +112,7 @@ export function WorkflowForm({
                 step={field.type === "number" ? "any" : undefined}
                 required={field.required}
                 placeholder={field.placeholder}
+                defaultValue={field.defaultValue}
               />
             )}
           </label>

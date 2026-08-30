@@ -3,7 +3,7 @@ import {z} from "zod";
 import {requireMembership} from "../../../lib/auth/require-membership";
 import {assertSameOrigin,securityErrorResponse} from "../../../lib/http/security";
 
-const inputSchema=z.object({organisationId:z.string().uuid(),action:z.enum(["respond","request_leave","report_sickness","withdraw_leave","clock_in","start_break","end_break","clock_out","claim_open_shift","request_correction","approve_time"]),values:z.record(z.string(),z.string())});
+const inputSchema=z.object({organisationId:z.string().uuid(),action:z.enum(["respond","request_leave","report_sickness","withdraw_leave","clock_in","start_break","end_break","clock_out","claim_open_shift","request_swap","respond_swap","request_correction","approve_time"]),values:z.record(z.string(),z.string())});
 
 export async function POST(request:Request){
   try{
@@ -56,6 +56,14 @@ export async function POST(request:Request){
       const {error}=await supabase.rpc("claim_open_shift" as "clock_out",{target_organisation_id:input.organisationId,target_offer_id:values.offerId} as never);
       if(error)throw error;
       return NextResponse.json({message:"Open dienst atomair toegewezen. Een gelijktijdige tweede claim kan deze dienst niet overnemen."});
+    }
+    if(input.action==="request_swap"){
+      const values=z.object({shiftId:z.string().uuid(),candidateStaffId:z.string().uuid(),reason:z.string().trim().min(3).max(500),idempotencyKey:z.string().uuid()}).parse(input.values);const {supabase}=await requireMembership(input.organisationId,"planning.respond");
+      const {data,error}=await supabase.rpc("request_shift_swap" as "clock_out",{target_organisation_id:input.organisationId,target_shift_id:values.shiftId,target_candidate_staff_id:values.candidateStaffId,target_reason:values.reason,target_idempotency_key:values.idempotencyKey} as never);if(error)throw error;return NextResponse.json({message:"Ruilverzoek veilig ingediend; de collega en manager moeten nog beslissen.",swap:data},{status:201});
+    }
+    if(input.action==="respond_swap"){
+      const values=z.object({swapId:z.string().uuid(),decision:z.enum(["accept","decline"])}).parse(input.values);const {supabase}=await requireMembership(input.organisationId,"planning.respond");
+      const {data,error}=await supabase.rpc("respond_shift_swap" as "clock_out",{target_organisation_id:input.organisationId,target_swap_id:values.swapId,target_accept:values.decision==="accept"} as never);if(error)throw error;return NextResponse.json({message:values.decision==="accept"?"Je instemming is vastgelegd; de manager beslist definitief.":"Ruilverzoek afgewezen.",swap:data});
     }
     if(input.action==="request_correction"){
       const values=z.object({venueId:z.string().uuid(),timeRecordId:z.string().uuid(),proposedClockIn:z.iso.datetime({local:true}).optional(),proposedClockOut:z.iso.datetime({local:true}).optional(),proposedBreakMinutes:z.coerce.number().int().min(0).max(480),reason:z.string().trim().min(5).max(1000)}).parse(input.values);

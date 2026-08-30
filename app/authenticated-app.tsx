@@ -942,6 +942,7 @@ async function planning(
     { data: timeRecordData },
     { data: breakPlanData },
     { data: rosterTemplateData },
+    { data: managerSwapData },
   ] = await Promise.all([
     supabase
       .from("departments")
@@ -957,7 +958,7 @@ async function planning(
       .order("name"),
     supabase
       .from("staff_profiles")
-      .select("id,full_name,role_name,onboarding_status,contact_email,effective_hourly_cost_minor,contracted_minutes_week,maximum_minutes_week,preferences")
+      .select("id,full_name,role_name,onboarding_status,contact_email,contact_phone,preferred_language,employment_status,invitation_state,effective_hourly_cost_minor,contracted_minutes_week,minimum_minutes_week,maximum_minutes_week,preferences")
       .eq("organisation_id", organisationId)
       .order("full_name"),
     supabase
@@ -1019,6 +1020,7 @@ async function planning(
       .limit(200),
     supabase.from("shift_break_plans").select("id,venue_id,shift_id,starts_at,ends_at,status,revision").eq("organisation_id",organisationId).in("status",["planned","adjusted","taken","missed"]).order("starts_at",{ascending:false}).limit(200),
     supabase.from("roster_templates").select("id,venue_id,name,shift_pattern,active").eq("organisation_id",organisationId).eq("active",true).order("name"),
+    supabase.from("swap_requests").select("id,venue_id,shift_id,requester_staff_id,candidate_staff_id,state,reason,cost_effect_minor,created_at").eq("organisation_id",organisationId).in("state",["requested","candidate_accepted"]).order("created_at"),
   ]);
   const departments = (departmentData ?? []) as unknown as {
     id: string;
@@ -1039,8 +1041,13 @@ async function planning(
     role_name: string;
     onboarding_status: string;
     contact_email: string | null;
+    contact_phone:string|null;
+    preferred_language:string;
+    employment_status:string;
+    invitation_state:string;
     effective_hourly_cost_minor: string | null;
     contracted_minutes_week: number | null;
+    minimum_minutes_week:number|null;
     maximum_minutes_week: number | null;
     preferences: Record<string,unknown>;
   }[];
@@ -1100,6 +1107,7 @@ async function planning(
   const timeRecords = (timeRecordData ?? []) as unknown as {id:string;venue_id:string;staff_id:string;shift_id:string|null;clocked_in_at:string;clocked_out_at:string|null;break_minutes:number;status:string;approved_at:string|null}[];
   const breakPlans=(breakPlanData??[]) as unknown as {id:string;venue_id:string;shift_id:string;starts_at:string;ends_at:string;status:string;revision:number}[];
   const rosterTemplates=(rosterTemplateData??[]) as unknown as {id:string;venue_id:string;name:string;shift_pattern:unknown[];active:boolean}[];
+  const managerSwaps=(managerSwapData??[]) as unknown as {id:string;venue_id:string;shift_id:string;requester_staff_id:string;candidate_staff_id:string;state:string;reason:string|null;cost_effect_minor:string|null;created_at:string}[];
   const departmentOptions = departments.map((row) => ({
     label: row.name,
     value: row.id,
@@ -1127,6 +1135,7 @@ async function planning(
       timeRecords={timeRecords}
       breakPlans={breakPlans}
       rosterTemplates={rosterTemplates}
+      swaps={managerSwaps}
       proposals={proposals}
     />
   );
@@ -1534,6 +1543,7 @@ async function myWork(
     { data: timeData },
     { data: availabilityData },
     { data: absenceData },
+    { data: swapData },
   ] = await Promise.all([
     supabase
       .from("shifts")
@@ -1566,6 +1576,7 @@ async function myWork(
       .order("starts_at")
       .limit(14),
     supabase.from("staff_absences").select("id,venue_id,starts_at,ends_at,absence_type,status,note").eq("organisation_id",organisationId).eq("staff_id",staff.id).order("starts_at",{ascending:false}).limit(20),
+    supabase.from("swap_requests").select("id,venue_id,shift_id,requester_staff_id,candidate_staff_id,state,reason,manager_reason,cost_effect_minor,created_at").eq("organisation_id",organisationId).or(`requester_staff_id.eq.${staff.id},candidate_staff_id.eq.${staff.id}`).order("created_at",{ascending:false}).limit(20),
   ]);
   const shifts = (shiftData ?? []) as unknown as {
     id: string;
@@ -1595,6 +1606,9 @@ async function myWork(
     availability: string;
   }[];
   const ownAbsences=(absenceData??[]) as unknown as {id:string;venue_id:string;starts_at:string;ends_at:string;absence_type:string;status:string;note:string|null}[];
+  const swaps=(swapData??[]) as unknown as {id:string;venue_id:string;shift_id:string;requester_staff_id:string;candidate_staff_id:string;state:string;reason:string|null;manager_reason:string|null;cost_effect_minor:string|null;created_at:string}[];
+  const candidateResults=await Promise.all(shifts.filter(shift=>shift.status==="published").map(async shift=>{const {data}=await supabase.rpc("eligible_swap_candidates" as "clock_out",{target_organisation_id:organisationId,target_shift_id:shift.id} as never);return[shift.id,(data??[]) as unknown as {staff_id:string;full_name:string}[]] as const}));
+  const swapCandidates=new Map(candidateResults);
   const openRecord = records.find((record) => !record.clocked_out_at);
   const next = shifts[0];
   return (
@@ -1761,6 +1775,9 @@ async function myWork(
           </div>
         )}
       </section>
+      {shifts.filter(shift=>(swapCandidates.get(shift.id)?.length??0)>0).map(shift=><WorkflowForm key={`swap-${shift.id}`} endpoint="/api/workforce" organisationId={organisationId} workflow="request_swap" title={locale==="nl"?`Ruil dienst ${new Date(shift.starts_at).toLocaleString("nl-NL")}`:`Swap shift ${new Date(shift.starts_at).toLocaleString("en-GB")}`} submitLabel={locale==="nl"?"Ruil voorstellen":"Propose swap"} fields={[{name:"shiftId",label:"",type:"hidden",defaultValue:shift.id},{name:"candidateStaffId",label:locale==="nl"?"Geschikte collega":"Eligible colleague",type:"select",required:true,options:(swapCandidates.get(shift.id)??[]).map(candidate=>({label:candidate.full_name,value:candidate.staff_id}))},{name:"reason",label:locale==="nl"?"Reden":"Reason",type:"textarea",required:true},{name:"idempotencyKey",label:"",type:"hidden",defaultValue:crypto.randomUUID()}]}/>)}
+      {swaps.filter(swap=>swap.candidate_staff_id===staff.id&&swap.state==="requested").map(swap=><section className="panel" key={swap.id}><h3>{locale==="nl"?"Ruilverzoek van collega":"Colleague swap request"}</h3><p>{swap.reason}</p><div className="split-workspace"><WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="respond_swap" title={locale==="nl"?"Instemmen":"Accept"} submitLabel={locale==="nl"?"Instemmen":"Accept"} fields={[{name:"swapId",label:"",type:"hidden",defaultValue:swap.id},{name:"decision",label:"",type:"hidden",defaultValue:"accept"}]}/><WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="respond_swap" title={locale==="nl"?"Afwijzen":"Decline"} submitLabel={locale==="nl"?"Afwijzen":"Decline"} fields={[{name:"swapId",label:"",type:"hidden",defaultValue:swap.id},{name:"decision",label:"",type:"hidden",defaultValue:"decline"}]}/></div></section>)}
+      {swaps.length?<RecordPanel title={locale==="nl"?"Mijn ruilverzoeken":"My swap requests"} empty="">{swaps.map(swap=><div className="record-row" key={swap.id}><b>{authEnumLabel(locale,swap.state)}</b><span>{swap.reason??"—"}</span><em>{swap.manager_reason??""}</em></div>)}</RecordPanel>:null}
       <div className="split-workspace">
         <WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="request_leave" title={locale==="nl"?"Vrij vragen":"Request leave"} submitLabel={locale==="nl"?"Aanvraag indienen":"Submit request"} fields={[{name:"venueId",label:t("common.venue"),type:"select",required:true,options:venueOptions(venues)},{name:"startsAt",label:locale==="nl"?"Vanaf":"From",type:"datetime-local",required:true},{name:"endsAt",label:locale==="nl"?"Tot":"Until",type:"datetime-local",required:true},{name:"note",label:locale==="nl"?"Notitie (optioneel)":"Note (optional)",type:"textarea"}]}/>
         <WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="report_sickness" title={locale==="nl"?"Ziek melden":"Report sickness"} submitLabel={locale==="nl"?"Veilig melden":"Report securely"} fields={[{name:"venueId",label:t("common.venue"),type:"select",required:true,options:venueOptions(venues)},{name:"startsAt",label:locale==="nl"?"Vanaf":"From",type:"datetime-local",required:true},{name:"endsAt",label:locale==="nl"?"Geschat tot":"Expected until",type:"datetime-local",required:true},{name:"note",label:locale==="nl"?"Korte operationele notitie":"Short operational note",type:"textarea"}]}/>
