@@ -944,6 +944,7 @@ async function planning(
     { data: rosterTemplateData },
     { data: managerSwapData },
     { data: timeCorrectionData },
+    { data: approvedLabourData },
   ] = await Promise.all([
     supabase
       .from("departments")
@@ -1023,6 +1024,7 @@ async function planning(
     supabase.from("roster_templates").select("id,venue_id,name,shift_pattern,active").eq("organisation_id",organisationId).eq("active",true).order("name"),
     supabase.from("swap_requests").select("id,venue_id,shift_id,requester_staff_id,candidate_staff_id,state,reason,cost_effect_minor,created_at").eq("organisation_id",organisationId).in("state",["requested","candidate_accepted"]).order("created_at"),
     supabase.from("time_corrections").select("id,venue_id,time_record_id,reason,original_values,proposed_values,status,created_at").eq("organisation_id",organisationId).eq("status","requested").order("created_at"),
+    supabase.from("approved_labour_results").select("id,venue_id,trading_date,planned_minutes,worked_minutes,planned_cost_minor,actual_cost_minor,calculation_version,evidence,content_hash,calculated_at").eq("organisation_id",organisationId).order("calculated_at",{ascending:false}).limit(60),
   ]);
   const departments = (departmentData ?? []) as unknown as {
     id: string;
@@ -1111,6 +1113,7 @@ async function planning(
   const rosterTemplates=(rosterTemplateData??[]) as unknown as {id:string;venue_id:string;name:string;shift_pattern:unknown[];active:boolean}[];
   const managerSwaps=(managerSwapData??[]) as unknown as {id:string;venue_id:string;shift_id:string;requester_staff_id:string;candidate_staff_id:string;state:string;reason:string|null;cost_effect_minor:string|null;created_at:string}[];
   const timeCorrections=(timeCorrectionData??[]) as unknown as {id:string;venue_id:string;time_record_id:string;reason:string;original_values:Record<string,unknown>;proposed_values:Record<string,unknown>;status:string;created_at:string}[];
+  const approvedLabourResults=(approvedLabourData??[]) as unknown as {id:string;venue_id:string;trading_date:string;planned_minutes:number;worked_minutes:number;planned_cost_minor:string;actual_cost_minor:string;calculation_version:string;evidence:Record<string,unknown>;content_hash:string;calculated_at:string}[];
   const departmentOptions = departments.map((row) => ({
     label: row.name,
     value: row.id,
@@ -1140,6 +1143,7 @@ async function planning(
       rosterTemplates={rosterTemplates}
       swaps={managerSwaps}
       timeCorrections={timeCorrections}
+      approvedLabourResults={approvedLabourResults}
       proposals={proposals}
     />
   );

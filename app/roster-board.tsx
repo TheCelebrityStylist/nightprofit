@@ -41,6 +41,7 @@ type BreakPlan={id:string;venue_id:string;shift_id:string;starts_at:string;ends_
 type RosterTemplate={id:string;venue_id:string;name:string;shift_pattern:unknown[];active:boolean};
 type SwapRequest={id:string;venue_id:string;shift_id:string;requester_staff_id:string;candidate_staff_id:string;state:string;reason:string|null;cost_effect_minor:string|null;created_at:string};
 type TimeCorrection={id:string;venue_id:string;time_record_id:string;reason:string;original_values:Record<string,unknown>;proposed_values:Record<string,unknown>;status:string;created_at:string};
+type ApprovedLabourResult={id:string;venue_id:string;trading_date:string;planned_minutes:number;worked_minutes:number;planned_cost_minor:string;actual_cost_minor:string;calculation_version:string;evidence:Record<string,unknown>;content_hash:string;calculated_at:string};
 type Interval = {
   id: string;
   venue_id: string;
@@ -118,6 +119,7 @@ export function RosterBoard({
   rosterTemplates,
   swaps,
   timeCorrections,
+  approvedLabourResults,
   proposals,
 }: {
   organisationId: string;
@@ -135,6 +137,7 @@ export function RosterBoard({
   rosterTemplates: RosterTemplate[];
   swaps:SwapRequest[];
   timeCorrections:TimeCorrection[];
+  approvedLabourResults:ApprovedLabourResult[];
   proposals: Proposal[];
 }) {
   const { locale } = useAuthLocale(),
@@ -253,7 +256,8 @@ export function RosterBoard({
   const pendingRecords=venueRecords.filter(record=>record.status==="submitted"&&record.clocked_out_at);
   const approvedRecords=venueRecords.filter(record=>record.status==="approved"&&record.clocked_out_at);
   const approvedMinutes=approvedRecords.reduce((sum,record)=>sum+Math.max(0,Math.floor((new Date(record.clocked_out_at!).getTime()-new Date(record.clocked_in_at).getTime())/60000)-record.break_minutes),0);
-  const actualLabor=approvedRecords.reduce((sum,record)=>{const minutes=Math.max(0,Math.floor((new Date(record.clocked_out_at!).getTime()-new Date(record.clocked_in_at).getTime())/60000)-record.break_minutes);const person=staff.find(row=>row.id===record.staff_id);return sum+(BigInt(person?.effective_hourly_cost_minor??"0")*BigInt(minutes)+30n)/60n},0n);
+  const latestApprovedLabour=approvedLabourResults.filter(result=>result.venue_id===venueId&&new Date(`${result.trading_date}T00:00:00`)>=weekStart&&new Date(`${result.trading_date}T00:00:00`)<weekEnd).sort((left,right)=>right.calculated_at.localeCompare(left.calculated_at))[0];
+  const actualLabor=BigInt(latestApprovedLabour?.actual_cost_minor??"0");
 
   async function mutate(action: string, values: Record<string, string>, optimistic?: () => void) {
     setBusy(true);
@@ -552,7 +556,7 @@ export function RosterBoard({
         <header><div><span className="eyebrow">{tx("VRAAG → DEKKING","DEMAND → COVERAGE")}</span><h3>{tx("Waarom deze bezetting nodig is","Why this staffing is required")}</h3></div><small>{tx("Vraagforecast en vastgelegde diensten; geen AI-score.","Demand forecast and persisted shifts; no AI score.")}</small></header>
         {coverageIntervals.length?<div className="coverage-table" role="table"><div className="coverage-row coverage-heading" role="row"><span>{tx("Interval","Interval")}</span><span>{tx("Vraag","Demand")}</span><span>{tx("Nodig","Required")}</span><span>{tx("Gepland","Planned")}</span><span>{tx("Verschil","Difference")}</span><span>{tx("Kosten","Cost")}</span></div>{coverageIntervals.map(row=><button type="button" className={`coverage-row ${row.gap?"has-gap":row.overstaffing?"overstaffed":"covered"}`} role="row" key={row.id} onClick={()=>{if(row.gap&&venueDepartments[0]){setNewShift({day:new Date(row.startsAt),departmentId:venueDepartments[0].id,staffId:"open"});setPanel("new")}}}><span>{new Date(row.startsAt).toLocaleString(locale==="nl"?"nl-NL":"en-GB",{weekday:"short",hour:"2-digit",minute:"2-digit"})}</span><span>{visibleIntervals.find(interval=>interval.id===row.id)?.expected_guests??"—"}</span><span>{row.requiredStaff}</span><span>{row.plannedStaff}</span><strong>{row.gap?`−${row.gap}`:row.overstaffing?`+${row.overstaffing}`:"✓"}</strong><span>{currency(row.plannedCostMinor)}</span></button>)}</div>:<p className="quiet">{tx("Nog geen vastgelegde vraagintervallen. Maak eerst een serviceforecast.","No persisted demand intervals yet. Create a service forecast first.")}</p>}
       </section>
-      <section className="staffing-command" aria-label={tx("Live bezetting en uren","Live staffing and hours")}><article><span className="eyebrow">{tx("LIVE BEZETTING","LIVE STAFFING")}</span><h3>{tx("Alleen actuele afwijkingen en beslissingen","Only current deviations and decisions")}</h3><div className="command-kpis"><div><b>{venueRecords.filter(record=>record.status==="open").length}</b><span>{tx("ingeklokt","clocked in")}</span></div><div><b>{pendingRecords.length}</b><span>{tx("uren te beoordelen","hours awaiting approval")}</span></div><div><b>{approvedMinutes}</b><span>{tx("goedgekeurde minuten","approved minutes")}</span></div><div><b>{currency(actualLabor)}</b><span>{tx("werkelijke loonkosten","actual labor")}</span></div></div><button type="button" onClick={()=>setPanel("missed")}>{tx("Gemiste registratie vastleggen","Record missed event")}</button></article><article><span className="eyebrow">{tx("URENCONTROLE","HOURS REVIEW")}</span><h3>{tx("Goedkeuren behoudt de oorspronkelijke tijdgebeurtenissen","Approval preserves original time events")}</h3>{timeCorrections.filter(correction=>correction.venue_id===venueId).map(correction=><div className="correction-decision" key={correction.id}><b>{tx("Correctieverzoek","Correction request")}</b><span>{correction.reason}</span><small>{JSON.stringify(correction.original_values)} → {JSON.stringify(correction.proposed_values)}</small><div><button type="button" className="primary" disabled={busy} onClick={()=>void workforceMutate("decide_correction",{correctionId:correction.id,decision:"approved",reason:tx("Goedgekeurd na vergelijking met planning en klokbewijs","Approved after comparing schedule and clock evidence")})}>{tx("Correctie goedkeuren","Approve correction")}</button><button type="button" disabled={busy} onClick={()=>void workforceMutate("decide_correction",{correctionId:correction.id,decision:"rejected",reason:tx("Afgewezen na beoordeling van klokbewijs","Rejected after clock-evidence review")})}>{tx("Afwijzen","Reject")}</button></div></div>)}{pendingRecords.length?<div className="hours-list">{pendingRecords.slice(0,8).map(record=>{const person=staff.find(row=>row.id===record.staff_id);const minutes=Math.max(0,Math.floor((new Date(record.clocked_out_at!).getTime()-new Date(record.clocked_in_at).getTime())/60000)-record.break_minutes);return <div key={record.id}><span><b>{person?.full_name}</b><small>{minutes} min · {record.break_minutes} min {tx("pauze","break")}</small></span><button type="button" className="primary" disabled={busy} onClick={()=>void workforceMutate("approve_time",{timeRecordId:record.id,correctionReason:""})}>{tx("Uren goedkeuren","Approve hours")}</button></div>})}</div>:<p className="quiet">{tx("Geen ingediende uren wachten op goedkeuring.","No submitted hours await approval.")}</p>}</article></section>
+      <section className="staffing-command" aria-label={tx("Live bezetting en uren","Live staffing and hours")}><article><span className="eyebrow">{tx("LIVE BEZETTING","LIVE STAFFING")}</span><h3>{tx("Alleen actuele afwijkingen en beslissingen","Only current deviations and decisions")}</h3><div className="command-kpis"><div><b>{venueRecords.filter(record=>record.status==="open").length}</b><span>{tx("ingeklokt","clocked in")}</span></div><div><b>{pendingRecords.length}</b><span>{tx("uren te beoordelen","hours awaiting approval")}</span></div><div><b>{latestApprovedLabour?.worked_minutes??approvedMinutes}</b><span>{tx("goedgekeurde minuten","approved minutes")}</span></div><div><b>{latestApprovedLabour?currency(actualLabor):"—"}</b><span>{tx("werkelijke loonkosten","actual labor")}</span></div></div><small>{latestApprovedLabour?tx(`Goedgekeurd bewijs · ${latestApprovedLabour.content_hash.slice(0,12)}`,`Approved evidence · ${latestApprovedLabour.content_hash.slice(0,12)}`):tx("Loonkosten wachten op managergoedkeuring.","Labor cost awaits manager approval.")}</small><button type="button" onClick={()=>setPanel("missed")}>{tx("Gemiste registratie vastleggen","Record missed event")}</button></article><article><span className="eyebrow">{tx("URENCONTROLE","HOURS REVIEW")}</span><h3>{tx("Goedkeuren behoudt de oorspronkelijke tijdgebeurtenissen","Approval preserves original time events")}</h3>{timeCorrections.filter(correction=>correction.venue_id===venueId).map(correction=><div className="correction-decision" key={correction.id}><b>{tx("Correctieverzoek","Correction request")}</b><span>{correction.reason}</span><small>{JSON.stringify(correction.original_values)} → {JSON.stringify(correction.proposed_values)}</small><div><button type="button" className="primary" disabled={busy} onClick={()=>void workforceMutate("decide_correction",{correctionId:correction.id,decision:"approved",reason:tx("Goedgekeurd na vergelijking met planning en klokbewijs","Approved after comparing schedule and clock evidence")})}>{tx("Correctie goedkeuren","Approve correction")}</button><button type="button" disabled={busy} onClick={()=>void workforceMutate("decide_correction",{correctionId:correction.id,decision:"rejected",reason:tx("Afgewezen na beoordeling van klokbewijs","Rejected after clock-evidence review")})}>{tx("Afwijzen","Reject")}</button></div></div>)}{pendingRecords.length?<div className="hours-list">{pendingRecords.slice(0,8).map(record=>{const person=staff.find(row=>row.id===record.staff_id);const minutes=Math.max(0,Math.floor((new Date(record.clocked_out_at!).getTime()-new Date(record.clocked_in_at).getTime())/60000)-record.break_minutes);return <div key={record.id}><span><b>{person?.full_name}</b><small>{minutes} min · {record.break_minutes} min {tx("pauze","break")}</small></span><button type="button" className="primary" disabled={busy} onClick={()=>void workforceMutate("approve_time",{timeRecordId:record.id,correctionReason:""})}>{tx("Uren goedkeuren","Approve hours")}</button></div>})}</div>:<p className="quiet">{tx("Geen ingediende uren wachten op goedkeuring.","No submitted hours await approval.")}</p>}</article></section>
       {message ? (
         <div className="roster-message" role="status">
           {message}
@@ -1355,6 +1359,7 @@ function AbsencePanel({
                         venueId,
                         absenceId: row.id,
                         decision: "approved",
+                        reason: tx("Goedgekeurd na controle van de betrokken diensten en dekking", "Approved after reviewing affected shifts and coverage"),
                       })
                     }
                   >
@@ -1366,6 +1371,7 @@ function AbsencePanel({
                         venueId,
                         absenceId: row.id,
                         decision: "rejected",
+                        reason: tx("Afgewezen na beoordeling van de aanvraag en operationele dekking", "Rejected after reviewing the request and operational coverage"),
                       })
                     }
                   >

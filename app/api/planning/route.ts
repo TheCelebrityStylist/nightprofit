@@ -33,7 +33,7 @@ const staffSchema=z.object({venueId:z.string().uuid(),departmentId:z.string().uu
 const staffDeactivateSchema=z.object({staffId:z.string().uuid()});
 const invitationStateSchema=z.object({venueId:z.string().uuid(),invitationId:z.string().uuid(),state:z.enum(["opened_in_whatsapp","copied"])});
 const absenceSchema=z.object({venueId:z.string().uuid(),staffId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),absenceType:z.enum(["leave","sickness","other"]),note:z.string().trim().max(500)});
-const absenceDecisionSchema=z.object({venueId:z.string().uuid(),absenceId:z.string().uuid(),decision:z.enum(["approved","rejected"])});
+const absenceDecisionSchema=z.object({venueId:z.string().uuid(),absenceId:z.string().uuid(),decision:z.enum(["approved","rejected"]),reason:z.string().trim().min(5).max(1000)});
 const swapDecisionSchema=z.object({venueId:z.string().uuid(),swapId:z.string().uuid(),decision:z.enum(["approved","rejected"]),reason:z.string().trim().min(3).max(1000)});
 const openShiftOfferSchema=z.object({venueId:z.string().uuid(),shiftId:z.string().uuid(),closesAt:z.iso.datetime({local:true}),idempotencyKey:z.string().uuid()});
 const publishSchema=z.object({venueId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),expectedRevision:z.coerce.number().int().positive(),idempotencyKey:z.string().uuid()});
@@ -213,8 +213,8 @@ export async function POST(request:Request){
     }
     if(input.action==="absence_decide"){
       const values=absenceDecisionSchema.parse(input.values);
-      const {supabase,user}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
-      const {data,error}=await supabase.from("staff_absences").update({status:values.decision,reviewed_by:user.id,reviewed_at:new Date().toISOString()}).eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).eq("id",values.absenceId).select("id").single();if(error||!data)throw error??new Error("ABSENCE_NOT_FOUND");
+      const {supabase}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
+      const {data,error}=await supabase.rpc("decide_staff_absence" as "clock_out",{target_organisation_id:input.organisationId,target_absence_id:values.absenceId,target_decision:values.decision,target_reason:values.reason} as never);if(error||!data)throw error??new Error("ABSENCE_NOT_FOUND");
       return NextResponse.json({message:"Verlofbesluit opgeslagen; dekking is opnieuw beoordeeld."});
     }
     if(input.action==="swap_decide"){
