@@ -3,7 +3,7 @@ import { z } from "zod";
 import { createSupabaseServerClient } from "../../../../lib/supabase/server";
 import { assertSameOrigin, consumeRateLimit, opaqueRateLimitKey, securityErrorResponse } from "../../../../lib/http/security";
 
-const schema=z.object({accessToken:z.string().min(20).max(8192),refreshToken:z.string().min(20).max(8192)});
+const schema=z.object({accessToken:z.string().min(20).max(8192),refreshToken:z.string().min(1).max(8192)});
 
 export async function POST(request:Request){
   const correlationId=crypto.randomUUID();

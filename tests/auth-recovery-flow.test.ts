@@ -29,6 +29,7 @@ describe("Supabase activation and recovery contracts", () => {
     expect(form).toContain('fetch("/api/auth/session"');
     expect(sessionRoute).toContain("supabase.auth.setSession");
     expect(sessionRoute).toContain("supabase.auth.getUser()");
+    expect(sessionRoute).toContain("refreshToken:z.string().min(1).max(8192)");
     expect(sessionRoute).not.toMatch(/console\.(?:log|warn|error)/);
   });
 
