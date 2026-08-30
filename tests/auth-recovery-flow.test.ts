@@ -38,6 +38,7 @@ describe("Supabase activation and recovery contracts", () => {
     expect(forgotRoute).toContain('redirectTo:`${origin}/update-password`');
     expect(forgotRoute).not.toContain("/auth/callback?next=/update-password");
     expect(forgotRoute).toContain("if(error)");
+    expect(forgotRoute).toContain('"password-reset",email),8,60*60_000');
   });
 
   it.each(["missing", "invalid", "expired", "reused", "missing PKCE verifier"]) (
