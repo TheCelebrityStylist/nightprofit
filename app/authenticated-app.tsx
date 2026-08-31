@@ -650,7 +650,7 @@ async function dashboard(
       .select("id,expires_at")
       .eq("organisation_id", organisationId),
     supabase
-      .from("demand_forecast_intervals")
+      .from("current_demand_forecast_intervals" as "demand_forecast_intervals")
       .select(
         "id,venue_id,expected_guests,expected_revenue_minor,required_staff,starts_at,ends_at",
       )
@@ -968,7 +968,7 @@ async function planning(
       .eq("organisation_id", organisationId)
       .order("full_name"),
     supabase
-      .from("demand_forecast_intervals")
+      .from("current_demand_forecast_intervals" as "demand_forecast_intervals")
       .select(
         "id,venue_id,starts_at,ends_at,expected_guests,expected_revenue_minor,required_staff",
       )

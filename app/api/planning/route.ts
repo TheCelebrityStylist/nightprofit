@@ -255,8 +255,9 @@ export async function POST(request:Request){
       const values=proposalSchema.parse(input.values);
       const {supabase,user}=await requireMembership(input.organisationId,"ai.propose",values.venueId);
       const windowStart=iso(values.startsAt),windowEnd=iso(values.endsAt);if(new Date(windowEnd)<=new Date(windowStart))throw new Error("INVALID_WINDOW");
+      const {data:requirementEvidence,error:requirementError}=await supabase.rpc("refresh_staffing_requirements" as "clock_out",{target_organisation_id:input.organisationId,target_venue_id:values.venueId,target_window_start:windowStart,target_window_end:windowEnd} as never);if(requirementError)throw requirementError;
       const [{data:intervals},{data:shifts},{data:roleData},{data:staffData},{data:assignmentData},{data:qualificationData},{data:availabilityData},{data:absenceData}]=await Promise.all([
-        supabase.from("demand_forecast_intervals").select("expected_guests,expected_revenue_minor,required_staff,starts_at,ends_at").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).gte("starts_at",windowStart).lt("starts_at",windowEnd).order("starts_at"),
+        supabase.from("current_demand_forecast_intervals" as "demand_forecast_intervals").select("expected_guests,expected_revenue_minor,required_staff,starts_at,ends_at").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).gte("starts_at",windowStart).lt("starts_at",windowEnd).order("starts_at"),
         supabase.from("shifts").select("staff_id,starts_at,ends_at,status,locked").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).lt("starts_at",new Date(new Date(windowEnd).getTime()+11*3600000).toISOString()).gt("ends_at",new Date(new Date(windowStart).getTime()-11*3600000).toISOString()).not("status","in","(cancelled,rejected)"),
         supabase.from("operational_roles").select("id,department_id,hourly_cost_minor,minimum_staff,guests_per_staff").eq("organisation_id",input.organisationId).eq("active",true),
         supabase.from("staff_profiles").select("id,effective_hourly_cost_minor,contracted_minutes_week,maximum_minutes_week,employment_status,onboarding_status").eq("organisation_id",input.organisationId),
@@ -275,7 +276,7 @@ export async function POST(request:Request){
       const absences=(absenceData??[]) as unknown as {staff_id:string;starts_at:string;ends_at:string}[];
       const existing=(shifts??[]) as unknown as {staff_id:string|null;starts_at:string;ends_at:string;locked:boolean}[];
       const objectives:RosterObjective[]=["balanced","lowest_cost","preference"];
-      const inputSnapshot={window_start:windowStart,window_end:windowEnd,intervals:intervalRows,role_ids:roleRows.map(row=>row.id),staff_ids:staffRows.map(row=>row.id)};
+      const inputSnapshot={window_start:windowStart,window_end:windowEnd,intervals:intervalRows,role_ids:roleRows.map(row=>row.id),staff_ids:staffRows.map(row=>row.id),staffing_requirement_versions:requirementEvidence};
       const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify(inputSnapshot))),inputHash=Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,"0")).join("");
       const proposals=objectives.map(objective=>{
         const shiftPlan:Record<string,unknown>[]=[],plannedMinutes=new Map<string,number>();let unfilled=0,totalRequired=0,totalCost=0n,preferredAssignments=0;
@@ -300,7 +301,7 @@ export async function POST(request:Request){
     if(input.action==="scenario"){
       const values=scenarioSchema.parse(input.values);const {supabase,user}=await requireMembership(input.organisationId,"planning.manage",values.venueId);const windowStart=iso(values.startsAt),windowEnd=iso(values.endsAt);
       const [{data:intervalData,error:intervalError},{data:shiftData,error:shiftError}]=await Promise.all([
-        supabase.from("demand_forecast_intervals").select("id,starts_at,ends_at,required_staff,expected_revenue_minor").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).gte("starts_at",windowStart).lt("starts_at",windowEnd),
+        supabase.from("current_demand_forecast_intervals" as "demand_forecast_intervals").select("id,starts_at,ends_at,required_staff,expected_revenue_minor").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).gte("starts_at",windowStart).lt("starts_at",windowEnd),
         supabase.from("shifts").select("id,starts_at,ends_at,staff_id,hourly_cost_minor,break_minutes").eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).lt("starts_at",windowEnd).gt("ends_at",windowStart).not("status","in","(cancelled,rejected)"),
       ]);if(intervalError||shiftError)throw intervalError??shiftError;
       const coverage=calculateCoverage(((intervalData??[]) as unknown as {id:string;starts_at:string;ends_at:string;required_staff:number;expected_revenue_minor:string}[]).map(row=>({id:row.id,startsAt:row.starts_at,endsAt:row.ends_at,roleId:"all",requiredStaff:row.required_staff,expectedRevenueMinor:BigInt(row.expected_revenue_minor)})),((shiftData??[]) as unknown as {id:string;starts_at:string;ends_at:string;staff_id:string|null;hourly_cost_minor:string;break_minutes:number}[]).map(row=>({id:row.id,startsAt:row.starts_at,endsAt:row.ends_at,roleId:"all",staffId:row.staff_id,hourlyCostMinor:BigInt(row.hourly_cost_minor),breakMinutes:row.break_minutes})));
