@@ -27,6 +27,8 @@ type LearningRow={
   created_at:string;
 };
 
+type QueueState={key:string;queue:QueueRow[];learning:LearningRow[];error:boolean};
+
 const actionCopy:Record<string,{nl:string;en:string}>={
   coverage_gap:{nl:"Dekkingsgat sluiten",en:"Close coverage gap"},
   sickness_replacement:{nl:"Vervanging bij ziekmelding",en:"Sickness replacement"},
@@ -54,20 +56,23 @@ function numberFrom(value:unknown){
 }
 
 export function WorkforceDecisionQueue({organisationId,venueId,windowStart,windowEnd,locale}:{organisationId:string;venueId:string;windowStart:string;windowEnd:string;locale:"nl"|"en"}){
-  const [queue,setQueue]=useState<QueueRow[]>([]),[learning,setLearning]=useState<LearningRow[]>([]),[loading,setLoading]=useState(false),[error,setError]=useState("");
+  const requestKey=`${organisationId}:${venueId}:${windowStart}:${windowEnd}`;
+  const [state,setState]=useState<QueueState>({key:"",queue:[],learning:[],error:false});
   const tx=(nl:string,en:string)=>locale==="nl"?nl:en;
+  const loading=state.key!==requestKey;
+  const queue=loading?[]:state.queue;
+  const learning=loading?[]:state.learning;
 
   useEffect(()=>{
     if(!organisationId||!venueId||!windowStart||!windowEnd)return;
     const controller=new AbortController();
-    setLoading(true);setError("");
+    const key=`${organisationId}:${venueId}:${windowStart}:${windowEnd}`;
     const params=new URLSearchParams({organisationId,venueId,startsAt:windowStart,endsAt:windowEnd});
     void fetch(`/api/workforce/exceptions?${params.toString()}`,{signal:controller.signal,headers:{accept:"application/json"}})
-      .then(async response=>{const payload=await response.json() as {queue?:QueueRow[];learning?:LearningRow[]};if(!response.ok)throw new Error("queue_failed");setQueue(payload.queue??[]);setLearning(payload.learning??[])})
-      .catch(fetchError=>{if(fetchError instanceof DOMException&&fetchError.name==="AbortError")return;setError(tx("Beslisvolgorde kon niet worden geladen.","Decision priority could not be loaded."))})
-      .finally(()=>{if(!controller.signal.aborted)setLoading(false)});
+      .then(async response=>{const payload=await response.json() as {queue?:QueueRow[];learning?:LearningRow[]};if(!response.ok)throw new Error("queue_failed");if(!controller.signal.aborted)setState({key,queue:payload.queue??[],learning:payload.learning??[],error:false})})
+      .catch(fetchError=>{if(fetchError instanceof DOMException&&fetchError.name==="AbortError")return;if(!controller.signal.aborted)setState({key,queue:[],learning:[],error:true})});
     return()=>controller.abort();
-  },[organisationId,venueId,windowStart,windowEnd,locale]);
+  },[organisationId,venueId,windowStart,windowEnd]);
 
   const latestLearning=learning[0]??null;
   const learningSummary=useMemo(()=>{
@@ -83,8 +88,8 @@ export function WorkforceDecisionQueue({organisationId,venueId,windowStart,windo
 
   return <section className="workforce-inbox persisted-workforce-queue" aria-label={tx("Geverifieerde beslisvolgorde","Verified manager decision priority")}>
     <header><div><span className="eyebrow">{tx("GEVERIFIEERDE BESLISVOLGORDE","VERIFIED DECISION PRIORITY")}</span><h3>{tx("Wat eerst aandacht nodig heeft","What needs attention first")}</h3><small>{tx("Serverrangschikking uit vastgelegde vraag, rooster-, verzuim- en urenfeiten. Geen AI-score.","Server ranking from persisted demand, roster, absence and time facts. No AI score.")}</small></div><b>{loading?"…":queue.length}</b></header>
-    {error?<p className="quiet" role="status">{error}</p>:null}
-    {!loading&&!error&&!queue.length?<p className="quiet">{tx("Geen open personeelsuitzonderingen in deze periode.","No open workforce exceptions in this period.")}</p>:null}
+    {!loading&&state.error?<p className="quiet" role="status">{tx("Beslisvolgorde kon niet worden geladen.","Decision priority could not be loaded.")}</p>:null}
+    {!loading&&!state.error&&!queue.length?<p className="quiet">{tx("Geen open personeelsuitzonderingen in deze periode.","No open workforce exceptions in this period.")}</p>:null}
     {queue.slice(0,8).map((row,index)=>{
       const copy=actionCopy[row.action_type];
       const sources=evidenceSources(row.evidence_refs);
