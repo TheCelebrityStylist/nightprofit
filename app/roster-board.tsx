@@ -156,13 +156,15 @@ export function RosterBoard({
   const [selected, setSelected] = useState<Shift | null>(null);
   const [view, setView] = useState<"week" | "day" | "month">("week");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [departmentFilter, setDepartmentFilter] = useState("");
+  const [employeeSearch, setEmployeeSearch] = useState("");
   const [undoStack, setUndoStack] = useState<string[]>([]);
   const [redoStack, setRedoStack] = useState<string[]>([]);
   const [templateName,setTemplateName]=useState("");
   const [templateId,setTemplateId]=useState("");
   const [templateRepeats,setTemplateRepeats]=useState(1);
   useEffect(()=>{const handle=window.setTimeout(()=>setShifts(initialShifts),0);return()=>window.clearTimeout(handle)},[initialShifts]);
-  const [panel, setPanel] = useState<"shift" | "new" | "team" | "absence" | "availability" | "missed" | null>(
+  const [panel, setPanel] = useState<"shift" | "new" | "team" | "absence" | "availability" | "missed" | "health" | "scenario" | null>(
     null,
   );
   const [newShift, setNewShift] = useState<{
@@ -198,6 +200,8 @@ export function RosterBoard({
   const breakConflicts=visibleIntervals.filter(interval=>{const assigned=visibleShifts.filter(shift=>shift.staff_id&&new Date(shift.starts_at)<new Date(interval.ends_at)&&new Date(shift.ends_at)>new Date(interval.starts_at));const onBreak=new Set(visibleBreakPlans.filter(plan=>new Date(plan.starts_at)<new Date(interval.ends_at)&&new Date(plan.ends_at)>new Date(interval.starts_at)).map(plan=>plan.shift_id));return assigned.length>=interval.required_staff&&assigned.filter(shift=>!onBreak.has(shift.id)).length<interval.required_staff;}).length;
   const venueDepartments = departments.filter((row) => row.venue_id === venueId);
   const activeStaff = staff.filter((row) => row.onboarding_status !== "suspended");
+  const displayedDepartments = venueDepartments.filter((row) => !departmentFilter || row.id === departmentFilter);
+  const displayedStaff = activeStaff.filter((row) => row.full_name.toLocaleLowerCase(locale).includes(employeeSearch.trim().toLocaleLowerCase(locale)));
   const revenue = visibleIntervals.reduce(
     (sum, row) => sum + BigInt(row.expected_revenue_minor),
     0n,
@@ -388,21 +392,12 @@ export function RosterBoard({
     <div className="roster-product">
       <header className="roster-toolbar">
         <div>
-          <span className="eyebrow">{tx("TEAM & ROOSTER", "TEAM & ROSTER")}</span>
-          <h2>{tx("Weekrooster", "Weekly roster")}</h2>
-          <p>
-            {tx(
-              "Vraag, beschikbaarheid en loonkosten in één werkvlak.",
-              "Demand, availability and labor cost in one workspace.",
-            )}
-          </p>
+          <h2>{tx("Rooster", "Roster")}</h2>
+          <p>{tx("Plan je team voor de komende week.", "Plan your team for the coming week.")}</p>
         </div>
         <div className="roster-actions">
           <button className="secondary" onClick={() => setPanel("availability")}>
             {tx("Beschikbaarheid opvragen", "Request availability")}
-          </button>
-          <button className="secondary" onClick={() => setPanel("team")}>
-            {tx("Team beheren", "Manage team")}
           </button>
           <button
             className="primary"
@@ -419,7 +414,9 @@ export function RosterBoard({
               });
             }}
           >
-            {tx("Maak rooster", "Build roster")}
+            {!venueDepartments.length || !roles.length || !activeStaff.length
+              ? tx("Team instellen", "Set up team")
+              : tx("Maak rooster", "Build roster")}
           </button>
           <button
             className="primary publish"
@@ -445,7 +442,7 @@ export function RosterBoard({
         </div>
       </header>
       <section className="roster-context" aria-label={tx("Roosterperiode", "Roster period")}>
-        <label>
+        {venues.length > 1 ? <label>
           {tx("Vestiging", "Venue")}
           <select value={venueId} onChange={(event) => setVenueId(event.target.value)}>
             {venues.map((row) => (
@@ -454,7 +451,9 @@ export function RosterBoard({
               </option>
             ))}
           </select>
-        </label>
+        </label> : null}
+        <label>{tx("Afdeling", "Department")}<select value={departmentFilter} onChange={(event)=>setDepartmentFilter(event.target.value)}><option value="">{tx("Alle afdelingen", "All departments")}</option>{venueDepartments.map(row=><option value={row.id} key={row.id}>{row.name}</option>)}</select></label>
+        <label>{tx("Medewerker zoeken", "Search employee")}<input type="search" value={employeeSearch} onChange={(event)=>setEmployeeSearch(event.target.value)} placeholder={tx("Naam…", "Name…")}/></label>
         <div className="week-switch">
           <button
             aria-label={tx("Vorige week", "Previous week")}
@@ -480,26 +479,15 @@ export function RosterBoard({
             →
           </button>
         </div>
-        <button
-          className="secondary"
-          disabled={busy}
-          onClick={() =>
-            void mutate("copy_week", {
-              venueId,
-              startsAt: new Date(weekStart.getTime() - 7 * dayMs).toISOString(),
-              endsAt: weekStart.toISOString(),
-              idempotencyKey: crypto.randomUUID(),
-            })
-          }
-        >
-          {tx("Vorige week kopiëren", "Copy previous week")}
-        </button>
-        <button className="secondary" onClick={() => setPanel("absence")}>
-          {tx("Verlof / ziek", "Leave / sickness")}
-        </button>
+        <button className="secondary" onClick={() => setWeekStart(monday(new Date()))}>{tx("Vandaag", "Today")}</button>
         <div className="planner-view-switch" role="group" aria-label={tx("Roosterweergave","Roster view")}>
           {(["week","day","month"] as const).map(option=><button type="button" key={option} className={view===option?"active":""} aria-pressed={view===option} onClick={()=>setView(option)}>{option==="week"?tx("Week","Week"):option==="day"?tx("Dag","Day"):tx("Maand","Month")}</button>)}
         </div>
+        <details className="planner-more"><summary>{tx("Meer", "More")}</summary><div>
+          <button type="button" disabled={busy} onClick={() => void mutate("copy_week", {venueId,startsAt:new Date(weekStart.getTime()-7*dayMs).toISOString(),endsAt:weekStart.toISOString(),idempotencyKey:crypto.randomUUID()})}>{tx("Vorige week kopiëren", "Copy previous week")}</button>
+          <button type="button" onClick={() => setPanel("absence")}>{tx("Verlof en ziekte", "Leave and sickness")}</button>
+          <button type="button" onClick={() => setPanel("scenario")}>{tx("Scenario testen", "Test scenario")}</button>
+        </div></details>
       </section>
       <section className="planner-edit-bar" aria-label={tx("Roosterbewerkingen","Roster editing actions")}>
         <span>{selectedIds.length?`${selectedIds.length} ${tx("geselecteerd","selected")}`:tx("Selecteer diensten voor bulkbewerking","Select shifts for bulk editing")}</span>
@@ -518,31 +506,12 @@ export function RosterBoard({
         <label>{tx("Aantal weken","Number of weeks")}<input type="number" min="1" max="52" value={templateRepeats} onChange={event=>setTemplateRepeats(Math.max(1,Math.min(52,Number(event.target.value)||1)))}/></label>
         <button type="button" className="primary" disabled={busy||!templateId} onClick={()=>void templateMutate("template_apply")}>{templateRepeats>1?tx("Terugkerende diensten maken","Create recurring shifts"):tx("Template toepassen","Apply template")}</button>
       </section>
-      <section className="roster-kpis">
-        <article>
-          <span>{tx("Omzetforecast", "Revenue forecast")}</span>
-          <b>{currency(revenue)}</b>
-          <small>
-            {visibleIntervals.length} {tx("vraagblokken", "demand intervals")}
-          </small>
-        </article>
-        <article>
-          <span>{tx("Geplande loonkosten", "Planned labor")}</span>
-          <b>{currency(labor)}</b>
-          <small>
-            {percent} {tx("van omzet", "of revenue")}
-          </small>
-        </article>
-        <article>
-          <span>{tx("Dekking", "Coverage")}</span>
-          <b>{coverage.filter((row) => row.planned >= row.required).length}/7</b>
-          <small>{tx("dagen op norm", "days on target")}</small>
-        </article>
-        <article>
-          <span>{tx("Open diensten", "Open shifts")}</span>
-          <b>{visibleShifts.filter((row) => !row.staff_id).length}</b>
-          <small>{tx("toewijzing nodig", "need assignment")}</small>
-        </article>
+      <section className="planner-summary" aria-label={tx("Weekoverzicht", "Week summary")}>
+        <span><small>{tx("Dekking", "Coverage")}</small><b>{visibleIntervals.length ? `${coverageIntervals.reduce((sum,row)=>sum+row.plannedStaff,0)} / ${coverageIntervals.reduce((sum,row)=>sum+row.requiredStaff,0)}` : tx("Forecast ontbreekt", "Forecast missing")}</b></span>
+        <span><small>{tx("Geplande uren", "Planned hours")}</small><b>{visibleShifts.length ? `${Math.round(visibleShifts.reduce((sum,row)=>sum+Math.max(0,(new Date(row.ends_at).getTime()-new Date(row.starts_at).getTime())/60000-row.break_minutes),0)/6)/10} u` : tx("Nog geen diensten", "No shifts yet")}</b></span>
+        <span><small>{tx("Loonkosten", "Labor cost")}</small><b>{visibleShifts.length ? currency(labor) : tx("Nog niet berekend", "Not calculated yet")}</b></span>
+        <span><small>{tx("Loonpercentage", "Labor percentage")}</small><b>{visibleIntervals.length && visibleShifts.length ? percent : "—"}</b></span>
+        <button type="button" className={health.publishable && visibleShifts.length ? "summary-ok" : "summary-warn"} onClick={() => setPanel("health")}>{health.issues.length ? `${health.issues.length} ${tx("aandachtspunten", "issues")}` : visibleShifts.length ? tx("Rooster in orde", "Roster clear") : tx("Rooster nog niet klaar", "Roster not ready")}</button>
       </section>
       <section className="workforce-inbox" aria-label={tx("Beslissingen voor manager","Manager decision inbox")}><header><div><span className="eyebrow">{tx("WERKFORCE INBOX","WORKFORCE INBOX")}</span><h3>{tx("Defensief gerangschikte acties","Defensibly ranked actions")}</h3></div><b>{venueExceptions.length}</b></header>{venueExceptions.length?venueExceptions.map(item=>{const shift=item.shift_id?shifts.find(row=>row.id===item.shift_id):undefined;const correction=item.exception_type==="time_correction"?timeCorrections.find(row=>row.id===item.source_id):undefined;const record=item.exception_type==="submitted_hours"?timeRecords.find(row=>row.id===item.source_id):undefined;const swap=item.exception_type==="swap_decision"?swaps.find(row=>row.id===item.source_id):undefined;return <article key={item.action_key} data-severity={item.severity}><div><strong>{exceptionLabel(item.exception_type)}</strong><span>{new Date(item.relevant_at).toLocaleString(locale==="nl"?"nl-NL":"en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})} · {item.severity}</span><small>{item.why_it_matters}</small><small>{item.recommended_action}</small><details><summary>{tx("Bewijs en oplosvoorwaarde","Evidence and resolution condition")}</summary><p>{item.resolution_condition}</p><code>{item.action_key} · {String(item.evidence.shift_revision??item.evidence.input_hash??item.evidence.time_record_id??item.source_id)}</code></details></div>{item.exception_type==="swap_decision"&&swap?<><button type="button" className="primary" disabled={busy||swap.state!=="candidate_accepted"} onClick={()=>void mutate("swap_decide",{venueId,swapId:swap.id,decision:"approved",reason:tx("Goedgekeurd na hercontrole van dekking en regels","Approved after coverage and rule revalidation")})}>{tx("Goedkeuren + opvolgversie","Approve + successor version")}</button><button type="button" disabled={busy} onClick={()=>void mutate("swap_decide",{venueId,swapId:swap.id,decision:"rejected",reason:tx("Afgewezen na managercontrole","Rejected after manager review")})}>{tx("Afwijzen","Reject")}</button></>:item.exception_type==="time_correction"&&correction?<button type="button" className="primary" disabled={busy} onClick={()=>void workforceMutate("decide_correction",{correctionId:correction.id,decision:"approved",reason:tx("Goedgekeurd na vergelijking met klokbewijs","Approved after comparing clock evidence")})}>{tx("Correctie goedkeuren","Approve correction")}</button>:item.exception_type==="submitted_hours"&&record?<button type="button" className="primary" disabled={busy} onClick={()=>void workforceMutate("approve_time",{timeRecordId:record.id,correctionReason:""})}>{tx("Uren goedkeuren","Approve hours")}</button>:shift?<button type="button" className="primary" onClick={()=>{setSelected(shift);setPanel("shift")}}>{tx("Open betrokken dienst","Open affected shift")}</button>:item.exception_type==="coverage_gap"?<button type="button" className="primary" onClick={()=>{if(venueDepartments[0]){setNewShift({day:new Date(item.relevant_at),departmentId:venueDepartments[0].id,staffId:"open"});setPanel("new")}}}>{tx("Los interval op","Resolve interval")}</button>:item.exception_type==="stale_proposal"?<button type="button" className="primary" disabled={busy} onClick={()=>void mutate("proposal",{venueId,startsAt:weekStart.toISOString(),endsAt:weekEnd.toISOString()})}>{tx("Voorstellen vernieuwen","Regenerate proposals")}</button>:null}</article>}):<p className="quiet">{tx("Geen open workforce-uitzonderingen voor deze locatie.","No open workforce exceptions for this venue.")}</p>}</section>
       <section className="roster-intelligence" aria-label={tx("Roosterkwaliteit en vraagdekking", "Roster health and demand coverage")}>
@@ -624,18 +593,24 @@ export function RosterBoard({
           </div>
         </section>
       ) : null}
-      {!venueDepartments.length || !roles.length ? (
+      {!venueDepartments.length || !roles.length || !activeStaff.length ? (
         <button className="guided-setup" onClick={() => setPanel("team")}>
-          <b>{tx("Rooster instellen", "Set up roster")}</b>
+          <b>{tx("Stel je team in", "Set up your team")}</b>
           <span>
             {tx(
-              "Voeg in één stap een afdeling, rol en eerste medewerker toe.",
-              "Add a department, role and first employee in one guided step.",
+              "Voeg afdelingen, rollen en medewerkers toe om je eerste rooster te maken.",
+              "Add departments, roles and employees to create your first roster.",
             )}
           </span>
+          <small>{tx("1 Afdelingen · 2 Rollen · 3 Medewerkers · 4 Openingstijden · 5 Beschikbaarheid", "1 Departments · 2 Roles · 3 Employees · 4 Opening hours · 5 Availability")}</small>
           <em>→</em>
         </button>
       ) : null}
+      <section className="mobile-day-roster" aria-label={tx("Mobiel dagrooster", "Mobile day roster")}>
+        <header><button type="button" aria-label={tx("Vorige dag", "Previous day")} onClick={()=>setWeekStart(new Date(weekStart.getTime()-dayMs))}>←</button><b>{weekStart.toLocaleDateString(locale==="nl"?"nl-NL":"en-GB",{weekday:"long",day:"numeric",month:"short"})}</b><button type="button" aria-label={tx("Volgende dag", "Next day")} onClick={()=>setWeekStart(new Date(weekStart.getTime()+dayMs))}>→</button></header>
+        <div className="mobile-coverage"><span>{tx("Dekking", "Coverage")}</span><b>{coverage[0]?.planned ?? 0} / {coverage[0]?.required ?? 0}</b></div>
+        {visibleShifts.filter(shift=>new Date(shift.starts_at).toDateString()===weekStart.toDateString()).length ? visibleShifts.filter(shift=>new Date(shift.starts_at).toDateString()===weekStart.toDateString()).map(shift=><button type="button" className="mobile-shift-card" key={shift.id} onClick={()=>{setSelected(shift);setPanel("shift")}}><span><b>{staff.find(person=>person.id===shift.staff_id)?.full_name??tx("Open dienst","Open shift")}</b><small>{roles.find(role=>role.id===shift.role_id)?.name??tx("Dienst","Shift")}</small></span><strong>{new Date(shift.starts_at).toLocaleTimeString(locale==="nl"?"nl-NL":"en-GB",{hour:"2-digit",minute:"2-digit"})}–{new Date(shift.ends_at).toLocaleTimeString(locale==="nl"?"nl-NL":"en-GB",{hour:"2-digit",minute:"2-digit"})}</strong></button>) : <div className="mobile-empty"><b>{tx("Nog geen diensten", "No shifts yet")}</b><span>{tx("Voeg een dienst toe of maak een roostervoorstel.", "Add a shift or build a roster proposal.")}</span></div>}
+      </section>
       {view==="day"?<section className="day-planner" aria-label={tx("Dagrooster op servicetijdlijn","Day roster on service timeline")}><header><div><span className="eyebrow">{tx("DAGWEERGAVE","DAY VIEW")}</span><h3>{weekStart.toLocaleDateString(locale==="nl"?"nl-NL":"en-GB",{weekday:"long",day:"numeric",month:"long"})}</h3></div><small>{tx("Service-uren · vraag, pauzes en bezetting","Service hours · demand, breaks and staffing")}</small></header><div className="service-timeline">{Array.from({length:16},(_,index)=>index+12).map(hour=><div className="timeline-hour" key={hour}><b>{String(hour%24).padStart(2,"0")}:00</b><div>{visibleIntervals.filter(interval=>new Date(interval.starts_at).getHours()===hour%24).map(interval=><span className="demand-marker" key={interval.id}>{tx("nodig","required")} {interval.required_staff}</span>)}{visibleShifts.filter(shift=>new Date(shift.starts_at).toDateString()===weekStart.toDateString()&&new Date(shift.starts_at).getHours()===hour%24).map(shift=><button type="button" key={shift.id} className="timeline-shift" onClick={()=>{setSelected(shift);setPanel("shift")}}><b>{staff.find(person=>person.id===shift.staff_id)?.full_name??tx("Open dienst","Open shift")}</b><span>{new Date(shift.starts_at).toLocaleTimeString(locale==="nl"?"nl-NL":"en-GB",{hour:"2-digit",minute:"2-digit"})}–{new Date(shift.ends_at).toLocaleTimeString(locale==="nl"?"nl-NL":"en-GB",{hour:"2-digit",minute:"2-digit"})}</span>{visibleBreakPlans.some(plan=>plan.shift_id===shift.id)?<small>{tx("Pauze gepland","Break planned")}</small>:null}</button>)}</div></div>)}</div></section>:null}
       {view==="month"?<section className="month-planner" aria-label={tx("Beknopt maandrooster","Concise monthly roster")}><header><div><span className="eyebrow">{tx("MAANDWEERGAVE","MONTH VIEW")}</span><h3>{weekStart.toLocaleDateString(locale==="nl"?"nl-NL":"en-GB",{month:"long",year:"numeric"})}</h3></div></header><div className="month-grid">{Array.from({length:35},(_,index)=>{const first=new Date(weekStart.getFullYear(),weekStart.getMonth(),1);const gridStart=monday(first);const day=new Date(gridStart.getTime()+index*dayMs);const rows=shifts.filter(shift=>shift.venue_id===venueId&&shift.status!=="cancelled"&&new Date(shift.starts_at).toDateString()===day.toDateString());const requirement=intervals.filter(interval=>interval.venue_id===venueId&&new Date(interval.starts_at).toDateString()===day.toDateString()).reduce((max,row)=>Math.max(max,row.required_staff),0);return <button type="button" className={day.getMonth()===weekStart.getMonth()?"":"outside"} key={day.toISOString()} onClick={()=>{setWeekStart(day);setView("day")}}><b>{day.getDate()}</b><span>{rows.length} {tx("diensten","shifts")}</span>{requirement?<small>{tx("piek nodig","peak required")} {requirement}</small>:<small>{tx("geen vraagbewijs","no demand evidence")}</small>}</button>})}</div></section>:null}
       {view==="week"?<section
@@ -659,11 +634,11 @@ export function RosterBoard({
             </div>
           ))}
         </div>
-        {venueDepartments.map((department) => (
+        {displayedDepartments.map((department) => (
           <div className="department-group" key={department.id}>
             <h3>{department.name}</h3>
             {[
-              ...activeStaff,
+              ...displayedStaff,
               {
                 id: "open",
                 full_name: tx("Open diensten", "Open shifts"),
@@ -783,7 +758,11 @@ export function RosterBoard({
             >
               ×
             </button>
-            {panel === "availability" ? (
+            {panel === "health" ? (
+              <section className="context-detail"><span className="eyebrow">{tx("ROOSTERSTATUS", "ROSTER STATUS")}</span><h3>{health.issues.length ? tx("Aandacht nodig", "Needs attention") : tx("Rooster in orde", "Roster clear")}</h3>{health.issues.length?<ul>{health.issues.map(issue=><li key={issue.code}><b>{({coverage:tx("Dekking","Coverage"),compliance:tx("Regels","Rules"),availability:tx("Beschikbaarheid","Availability"),skills:tx("Rollen en vaardigheden","Roles and skills"),budget:tx("Budget","Budget"),hours:tx("Uren","Hours"),preference:tx("Voorkeuren","Preferences"),breaks:tx("Pauzes","Breaks"),evidence:tx("Ontbrekende informatie","Missing information")}[issue.dimension]??issue.dimension)}</b><span>{issue.count} · {issue.severity=== "blocking"?tx("blokkeert publicatie","blocks publication"):tx("controleren","review")}</span></li>)}</ul>:<p>{tx("Er zijn geen bekende blokkades voor deze week.","There are no known blockers for this week.")}</p>}</section>
+            ) : panel === "scenario" ? (
+              <section className="context-detail"><span className="eyebrow">{tx("SCENARIO TESTEN", "TEST SCENARIO")}</span><h3>{tx("Wat verandert er bij andere drukte?", "What changes with different demand?")}</h3><div className="scenario-buttons">{[-2000,-1000,0,1000,2000].map(value=><button type="button" className={scenarioBasisPoints===value?"active":""} key={value} onClick={()=>{setScenarioBasisPoints(value);if(value)void mutate("scenario",{venueId,startsAt:weekStart.toISOString(),endsAt:weekEnd.toISOString(),demandChangeBasisPoints:String(value),idempotencyKey:crypto.randomUUID()})}}>{value===0?tx("Basis","Baseline"):`${value>0?"+":""}${value/100}%`}</button>)}</div><dl><div><dt>{tx("Benodigde medewerkers","Required staff")}</dt><dd>{(scenario??coverageIntervals).reduce((sum,row)=>sum+row.requiredStaff,0)}</dd></div><div><dt>{tx("Dekkingsgaten","Coverage gaps")}</dt><dd>{(scenario??coverageIntervals).reduce((sum,row)=>sum+row.gap,0)}</dd></div><div><dt>{tx("Geplande loonkosten","Planned labor cost")}</dt><dd>{visibleShifts.length?currency(labor):"—"}</dd></div></dl></section>
+            ) : panel === "availability" ? (
               <AvailabilityManager
                 organisationId={organisationId}
                 venueTimezone={venueTimezone}

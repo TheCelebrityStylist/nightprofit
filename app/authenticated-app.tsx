@@ -259,7 +259,7 @@ async function AuthenticatedAppContent({
           </div>
         </header>
         <div className="content">
-          <section className="hero-row">
+          {path !== "/app/planning" && <section className="hero-row">
             <div>
               <div className="eyebrow">{t("shell.live")}</div>
               <h1>{activeLabel}</h1>
@@ -270,7 +270,7 @@ async function AuthenticatedAppContent({
                 {t("shell.newClose")}
               </Link>
             )}
-          </section>
+          </section>}
           {content}
         </div>
       </main>
