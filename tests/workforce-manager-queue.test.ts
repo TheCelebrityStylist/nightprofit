@@ -36,8 +36,8 @@ describe("manager workforce decision queue",()=>{
     expect(component).toContain("NightProfit does not infer a conclusion yet");
   });
 
-  it("refetches when the active venue or visible planner window changes",()=>{
-    expect(component).toContain("[organisationId,venueId,windowStart,windowEnd,locale]");
+  it("refetches only when the active data scope changes",()=>{
+    expect(component).toContain("[organisationId,venueId,windowStart,windowEnd]");
     expect(component).toContain("AbortController");
     expect(component).toContain("/api/workforce/exceptions?");
   });
