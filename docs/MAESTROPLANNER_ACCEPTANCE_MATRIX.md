@@ -1,6 +1,6 @@
 # Maestroplanner acceptance matrix
 
-This matrix is source-evidenced at checkpoint `300e673` and is updated as code-controlled gaps close. “Implemented” means an actual persisted operation exists; it does not imply remote acceptance.
+This matrix tracks the current source on `codex/nightprofit-os-production` and is updated as code-controlled gaps close. “Implemented” means an actual persisted operation exists; it does not imply remote acceptance.
 
 | Workflow | Classification | Evidence and remaining gate |
 | --- | --- | --- |
@@ -24,7 +24,7 @@ This matrix is source-evidenced at checkpoint `300e673` and is updated as code-c
 | Controlled swaps | Implemented; remote migration and authenticated acceptance pending | Employee proposal, scoped candidate list/consent, manager decision, hard-rule revalidation, cost comparison and immutable successor publication in `20260729001900_controlled_shift_swaps.sql`. |
 | Append-only attendance and corrections | Implemented; remote migration and authenticated acceptance pending | Immutable/idempotent clock ledger, guarded transitions, explicit manager-authored missed events and reasoned correction decisions in `20260729002100_append_only_timekeeping.sql`. |
 | Labour-to-close propagation | Implemented; remote migration and authenticated acceptance pending | `20260729002200_authoritative_labour_propagation.sql` makes manager approval the calculation boundary, expands paid minutes in venue time, applies dated supplements and recorded/planned breaks, creates immutable hashed results, and propagates only that evidence into Live Profit Pulse, learning and the mutable close draft. |
-| Workforce exception inbox and learning | Partially implemented | Coverage/sickness decisions are direct; unified ranked queue and evidence-backed comparable-service learning remain. |
+| Workforce exception inbox and learning | Partially implemented; backend acceptance pending | `20260729002400_workforce_exception_learning.sql` adds one capability-gated ranked queue for coverage, sickness, approved leave, swaps and time review, plus immutable comparable-service learning captured only from locked services and approved labour. The manager inbox still needs to consume this persisted queue and authenticated remote acceptance remains. |
 | NL/EN, responsive and accessibility | Partially implemented | Core authenticated planner is localized and responsive; full route/browser acceptance at four widths remains. |
 | Remote RLS and Storage verification | Credential-test-blocked | Nine tests intentionally remain skipped without privileged test credentials. |
 | WhatsApp provider delivery | Provider-blocked | Manual open/copy workflow must remain operational until provider credentials exist. |
