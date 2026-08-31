@@ -4,8 +4,8 @@ import Link from "next/link";
 import { AuthLocaleProvider, AuthLocaleSwitch, useAuthLocale } from "./auth-locale";
 import type { AuthLocale, AuthMessageKey } from "../lib/i18n/authenticated";
 
-type AuthErrorCode="LINK_INVALID"|"RECOVERY_SESSION_MISSING"|"PASSWORD_POLICY"|"PASSWORD_MISMATCH"|"TOO_MANY_ATTEMPTS"|"AUTH_CONFIGURATION_INCOMPLETE"|"AUTH_NETWORK"|"AUTH_UNEXPECTED"|"PASSWORD_UPDATE_FAILED";
-const authErrorMessages:Record<AuthErrorCode,AuthMessageKey>={LINK_INVALID:"auth.linkInvalid",RECOVERY_SESSION_MISSING:"auth.sessionMissing",PASSWORD_POLICY:"auth.passwordPolicy",PASSWORD_MISMATCH:"auth.passwordMismatch",TOO_MANY_ATTEMPTS:"auth.tooManyAttempts",AUTH_CONFIGURATION_INCOMPLETE:"auth.configurationIncomplete",AUTH_NETWORK:"auth.networkError",AUTH_UNEXPECTED:"auth.unexpectedError",PASSWORD_UPDATE_FAILED:"auth.unexpectedError"};
+type AuthErrorCode="LINK_INVALID"|"RECOVERY_SESSION_MISSING"|"PASSWORD_POLICY"|"PASSWORD_MISMATCH"|"TOO_MANY_ATTEMPTS"|"AUTH_CONFIGURATION_INCOMPLETE"|"AUTH_NETWORK"|"AUTH_UNEXPECTED"|"PASSWORD_UPDATE_FAILED"|"INVALID_CREDENTIALS"|"INVALID_AUTH_INPUT"|"AUTH_PROVIDER_UNAVAILABLE"|"AUTH_SESSION_FAILED";
+const authErrorMessages:Record<AuthErrorCode,AuthMessageKey>={LINK_INVALID:"auth.linkInvalid",RECOVERY_SESSION_MISSING:"auth.sessionMissing",PASSWORD_POLICY:"auth.passwordPolicy",PASSWORD_MISMATCH:"auth.passwordMismatch",TOO_MANY_ATTEMPTS:"auth.tooManyAttempts",AUTH_CONFIGURATION_INCOMPLETE:"auth.configurationIncomplete",AUTH_NETWORK:"auth.networkError",AUTH_UNEXPECTED:"auth.unexpectedError",PASSWORD_UPDATE_FAILED:"auth.unexpectedError",INVALID_CREDENTIALS:"auth.invalidCredentials",INVALID_AUTH_INPUT:"auth.invalidCredentials",AUTH_PROVIDER_UNAVAILABLE:"auth.providerUnavailable",AUTH_SESSION_FAILED:"auth.sessionFailed"};
 
 export function AuthForm({ mode, locale = "nl", initialError }: { mode:"login"|"signup"|"forgot"|"update"; locale?:AuthLocale;initialError?:AuthErrorCode }) {
   return <AuthLocaleProvider initialLocale={locale}><LocalizedAuthForm mode={mode} initialError={initialError}/></AuthLocaleProvider>;

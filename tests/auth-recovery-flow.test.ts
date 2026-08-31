@@ -81,6 +81,11 @@ describe("Supabase activation and recovery contracts", () => {
     }
   });
 
+  it("maps login failures to actionable sign-in messages instead of recovery errors",()=>{
+    for(const code of ["INVALID_CREDENTIALS","INVALID_AUTH_INPUT","AUTH_PROVIDER_UNAVAILABLE","AUTH_SESSION_FAILED"])expect(form).toContain(code);
+    for(const key of ["auth.invalidCredentials","auth.providerUnavailable","auth.sessionFailed"] as const){expect(authMessage("nl",key).length).toBeGreaterThan(20);expect(authMessage("en",key).length).toBeGreaterThan(20)}
+  });
+
   it("keeps the password page usable at the mobile breakpoint", () => {
     expect(css).toContain("width:min(100%,450px)");
     expect(css).toContain("min-height:44px");

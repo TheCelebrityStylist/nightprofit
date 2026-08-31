@@ -1346,6 +1346,7 @@ function AbsencePanel({
   return (
     <div>
       <h3>{tx("Verlof en ziekte", "Leave and sickness")}</h3>
+      {!staff.length?<p className="quiet">{tx("Voeg eerst een medewerker toe via Team beheren.","Add an employee through Manage team first.")}</p>:null}
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -1358,7 +1359,7 @@ function AbsencePanel({
         <input type="hidden" name="venueId" value={venueId} />
         <label>
           {tx("Medewerker", "Employee")}
-          <select name="staffId">
+          <select name="staffId" required disabled={!staff.length}>
             {staff.map((person) => (
               <option key={person.id} value={person.id}>
                 {person.full_name}
@@ -1386,7 +1387,7 @@ function AbsencePanel({
           {tx("Toelichting", "Note")}
           <textarea name="note" />
         </label>
-        <button className="primary" disabled={busy}>
+        <button className="primary" disabled={busy||!staff.length}>
           {tx("Opslaan", "Save")}
         </button>
       </form>
@@ -1437,5 +1438,5 @@ function AbsencePanel({
 }
 
 function MissedTimePanel({venueId,staff,shifts,busy,save,tx}:{venueId:string;staff:Staff[];shifts:Shift[];busy:boolean;save:(values:Record<string,string>)=>void;tx:(nl:string,en:string)=>string}){
-  return <form onSubmit={event=>{event.preventDefault();save({...Object.fromEntries(new FormData(event.currentTarget)) as Record<string,string>,idempotencyKey:crypto.randomUUID()})}}><h3>{tx("Gemiste klokregistratie","Missed clock event")}</h3><p>{tx("Gebruik dit alleen wanneer brongebeurtenissen ontbreken. De managerreden wordt onveranderlijk vastgelegd.","Use only when source events are missing. The manager reason is recorded immutably.")}</p><input type="hidden" name="venueId" value={venueId}/><label>{tx("Medewerker","Employee")}<select name="staffId" required>{staff.map(person=><option key={person.id} value={person.id}>{person.full_name}</option>)}</select></label><label>{tx("Geplande dienst (optioneel)","Scheduled shift (optional)")}<select name="shiftId"><option value="">—</option>{shifts.filter(shift=>shift.staff_id).map(shift=><option key={shift.id} value={shift.id}>{staff.find(person=>person.id===shift.staff_id)?.full_name} · {new Date(shift.starts_at).toLocaleString()}</option>)}</select></label><label>{tx("Start","Start")}<input name="clockedInAt" type="datetime-local" required/></label><label>{tx("Einde","End")}<input name="clockedOutAt" type="datetime-local" required/></label><label>{tx("Pauze (min)","Break (min)")}<input name="breakMinutes" type="number" min="0" max="480" defaultValue="0" required/></label><label>{tx("Reden en bewijs","Reason and evidence")}<textarea name="reason" minLength={5} maxLength={1000} required/></label><button className="primary" disabled={busy}>{tx("Als correctie vastleggen","Record as correction")}</button></form>
+  return <form onSubmit={event=>{event.preventDefault();save({...Object.fromEntries(new FormData(event.currentTarget)) as Record<string,string>,idempotencyKey:crypto.randomUUID()})}}><h3>{tx("Gemiste klokregistratie","Missed clock event")}</h3><p>{tx("Gebruik dit alleen wanneer brongebeurtenissen ontbreken. De managerreden wordt onveranderlijk vastgelegd.","Use only when source events are missing. The manager reason is recorded immutably.")}</p>{!staff.length?<p className="quiet">{tx("Voeg eerst een medewerker toe via Team beheren.","Add an employee through Manage team first.")}</p>:null}<input type="hidden" name="venueId" value={venueId}/><label>{tx("Medewerker","Employee")}<select name="staffId" required disabled={!staff.length}>{staff.map(person=><option key={person.id} value={person.id}>{person.full_name}</option>)}</select></label><label>{tx("Geplande dienst (optioneel)","Scheduled shift (optional)")}<select name="shiftId"><option value="">—</option>{shifts.filter(shift=>shift.staff_id).map(shift=><option key={shift.id} value={shift.id}>{staff.find(person=>person.id===shift.staff_id)?.full_name} · {new Date(shift.starts_at).toLocaleString()}</option>)}</select></label><label>{tx("Start","Start")}<input name="clockedInAt" type="datetime-local" required/></label><label>{tx("Einde","End")}<input name="clockedOutAt" type="datetime-local" required/></label><label>{tx("Pauze (min)","Break (min)")}<input name="breakMinutes" type="number" min="0" max="480" defaultValue="0" required/></label><label>{tx("Reden en bewijs","Reason and evidence")}<textarea name="reason" minLength={5} maxLength={1000} required/></label><button className="primary" disabled={busy||!staff.length}>{tx("Als correctie vastleggen","Record as correction")}</button></form>
 }

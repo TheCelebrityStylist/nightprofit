@@ -2,9 +2,10 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthLocale } from "./auth-locale";
-import { zonedInputToUtc } from "@/lib/workforce/timezone";
+import { utcToZonedInput, zonedInputToUtc } from "@/lib/workforce/timezone";
 
 type Option = { id: string; label: string };
+const defaultSchedule=(venueTimezone:string)=>{const start=new Date();start.setUTCDate(start.getUTCDate()+((8-start.getUTCDay())%7||7));start.setUTCHours(0,0,0,0);const end=new Date(start.getTime()+7*86400000),deadline=new Date(start.getTime()-2*86400000+18*3600000);return{startsAt:utcToZonedInput(start.toISOString(),venueTimezone),endsAt:utcToZonedInput(end.toISOString(),venueTimezone),deadlineAt:utcToZonedInput(deadline.toISOString(),venueTimezone)}};
 export function AvailabilityManager({
   organisationId,
   venueTimezone,
@@ -25,6 +26,7 @@ export function AvailabilityManager({
   const [error, setError] = useState("");
   const [links, setLinks] = useState<Record<string, string>>({});
   const [requestId, setRequestId] = useState("");
+  const [schedule,setSchedule]=useState(()=>defaultSchedule(venueTimezone));
   const [recipientIds, setRecipientIds] = useState<Record<string, string>>({});
   const [shares, setShares] = useState<
     Record<
@@ -115,15 +117,15 @@ export function AvailabilityManager({
         </label>
         <label>
           {t("availability.periodStart")}
-          <input name="startsAt" type="datetime-local" required />
+          <input name="startsAt" type="datetime-local" required value={schedule.startsAt} onChange={event=>setSchedule(current=>({...current,startsAt:event.target.value}))}/>
         </label>
         <label>
           {t("availability.periodEnd")}
-          <input name="endsAt" type="datetime-local" required />
+          <input name="endsAt" type="datetime-local" required value={schedule.endsAt} onChange={event=>setSchedule(current=>({...current,endsAt:event.target.value}))}/>
         </label>
         <label>
           {t("availability.deadline")}
-          <input name="deadlineAt" type="datetime-local" required />
+          <input name="deadlineAt" type="datetime-local" required value={schedule.deadlineAt} onChange={event=>setSchedule(current=>({...current,deadlineAt:event.target.value}))}/>
         </label>
       </div>
       <fieldset className="recipient-picker">
@@ -144,6 +146,7 @@ export function AvailabilityManager({
             {person.label}
           </label>
         ))}
+        {!staff.length?<p className="quiet">{t("availability.noRecipients")}</p>:null}
       </fieldset>
       {error && (
         <p className="form-error" role="alert">
@@ -200,7 +203,7 @@ export function AvailabilityManager({
           ))}
         </div>
       ) : null}
-      <button className="primary" disabled={pending || !selected.length} aria-busy={pending}>
+      <button className="primary" disabled={pending || !selected.length || !staff.length} aria-busy={pending}>
         {pending ? t("availability.sending") : t("availability.create")}
       </button>
     </form>
