@@ -927,6 +927,9 @@ async function planning(
   locale: AuthLocale,
 ) {
   const t=(key:AuthMessageKey)=>authMessage(locale,key);
+  const exceptionResponses=await Promise.all(venues.map(venue=>supabase.rpc("get_workforce_exception_inbox" as "clock_out",{target_organisation_id:organisationId,target_venue_id:venue.id,target_reference_at:new Date().toISOString()} as never)));
+  const exceptionFailure=exceptionResponses.find(response=>response.error)?.error;
+  if(exceptionFailure)throw exceptionFailure;
   const [
     { data: departmentData },
     { data: roleData },
@@ -945,6 +948,7 @@ async function planning(
     { data: managerSwapData },
     { data: timeCorrectionData },
     { data: approvedLabourData },
+    { data: workforceLearningData,error:workforceLearningError },
   ] = await Promise.all([
     supabase
       .from("departments")
@@ -1025,7 +1029,9 @@ async function planning(
     supabase.from("swap_requests").select("id,venue_id,shift_id,requester_staff_id,candidate_staff_id,state,reason,cost_effect_minor,created_at").eq("organisation_id",organisationId).in("state",["requested","candidate_accepted"]).order("created_at"),
     supabase.from("time_corrections").select("id,venue_id,time_record_id,reason,original_values,proposed_values,status,created_at").eq("organisation_id",organisationId).eq("status","requested").order("created_at"),
     supabase.from("approved_labour_results").select("id,venue_id,trading_date,planned_minutes,worked_minutes,planned_cost_minor,actual_cost_minor,calculation_version,evidence,content_hash,calculated_at").eq("organisation_id",organisationId).order("calculated_at",{ascending:false}).limit(60),
+    supabase.from("workforce_learning_results").select("id,venue_id,service_date,evidence_state,comparable_count,comparison_method,result,evidence_refs,calculation_version,content_hash,created_at").eq("organisation_id",organisationId).order("created_at",{ascending:false}).limit(30),
   ]);
+  if(workforceLearningError)throw workforceLearningError;
   const departments = (departmentData ?? []) as unknown as {
     id: string;
     venue_id: string;
@@ -1114,6 +1120,8 @@ async function planning(
   const managerSwaps=(managerSwapData??[]) as unknown as {id:string;venue_id:string;shift_id:string;requester_staff_id:string;candidate_staff_id:string;state:string;reason:string|null;cost_effect_minor:string|null;created_at:string}[];
   const timeCorrections=(timeCorrectionData??[]) as unknown as {id:string;venue_id:string;time_record_id:string;reason:string;original_values:Record<string,unknown>;proposed_values:Record<string,unknown>;status:string;created_at:string}[];
   const approvedLabourResults=(approvedLabourData??[]) as unknown as {id:string;venue_id:string;trading_date:string;planned_minutes:number;worked_minutes:number;planned_cost_minor:string;actual_cost_minor:string;calculation_version:string;evidence:Record<string,unknown>;content_hash:string;calculated_at:string}[];
+  const workforceExceptions=exceptionResponses.flatMap((response,index)=>((response.data??[]) as unknown as {action_key:string;exception_type:string;severity:string;rank_score:string;relevant_at:string;shift_id:string|null;staff_id:string|null;source_id:string;evidence:Record<string,unknown>;why_it_matters:string;recommended_action:string;resolution_condition:string}[]).map(item=>({...item,venue_id:venues[index]?.id??""})));
+  const workforceLearning=(workforceLearningData??[]) as unknown as {id:string;venue_id:string;service_date:string;evidence_state:string;comparable_count:number;comparison_method:Record<string,unknown>;result:Record<string,unknown>;evidence_refs:Record<string,unknown>;calculation_version:string;content_hash:string;created_at:string}[];
   const departmentOptions = departments.map((row) => ({
     label: row.name,
     value: row.id,
@@ -1144,6 +1152,8 @@ async function planning(
       swaps={managerSwaps}
       timeCorrections={timeCorrections}
       approvedLabourResults={approvedLabourResults}
+      workforceExceptions={workforceExceptions}
+      workforceLearning={workforceLearning}
       proposals={proposals}
     />
   );

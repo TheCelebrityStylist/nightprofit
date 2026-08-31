@@ -1,6 +1,6 @@
 # Maestroplanner acceptance matrix
 
-This matrix is source-evidenced at checkpoint `300e673` and is updated as code-controlled gaps close. “Implemented” means an actual persisted operation exists; it does not imply remote acceptance.
+This matrix was re-audited from the trusted `5ae646fa` tree after every tracked file was hash-checked against that commit. “Implemented” means an actual persisted operation exists; it does not imply remote acceptance. Browser, remote migration and credential-gated boundaries remain explicit.
 
 | Workflow | Classification | Evidence and remaining gate |
 | --- | --- | --- |
@@ -24,7 +24,8 @@ This matrix is source-evidenced at checkpoint `300e673` and is updated as code-c
 | Controlled swaps | Implemented; remote migration and authenticated acceptance pending | Employee proposal, scoped candidate list/consent, manager decision, hard-rule revalidation, cost comparison and immutable successor publication in `20260729001900_controlled_shift_swaps.sql`. |
 | Append-only attendance and corrections | Implemented; remote migration and authenticated acceptance pending | Immutable/idempotent clock ledger, guarded transitions, explicit manager-authored missed events and reasoned correction decisions in `20260729002100_append_only_timekeeping.sql`. |
 | Labour-to-close propagation | Implemented; remote migration and authenticated acceptance pending | `20260729002200_authoritative_labour_propagation.sql` makes manager approval the calculation boundary, expands paid minutes in venue time, applies dated supplements and recorded/planned breaks, creates immutable hashed results, and propagates only that evidence into Live Profit Pulse, learning and the mutable close draft. |
-| Workforce exception inbox and learning | Partially implemented | Coverage/sickness decisions are direct; unified ranked queue and evidence-backed comparable-service learning remain. |
+| Workforce exception inbox | Implemented; remote migration and authenticated browser acceptance pending | `20260729002400_workforce_exception_learning.sql` derives a manager-only, venue-scoped queue in PostgreSQL for sickness, approved leave, role coverage, swaps, corrections, submitted hours, open shifts and stale proposals. Stable keys, deterministic ranking, manager-readable evidence and governed direct actions are integrated into the existing planner. |
+| Closed-service workforce learning | Implemented; persisted-fixture and authenticated browser acceptance pending | The same migration requires a locked service, locked close, published roster and immutable approved-labour result; deduplicates comparable service dates; uses same venue/day and a declared ±30% actual-revenue band; persists an immutable result or explicit insufficient-comparables state. |
 | NL/EN, responsive and accessibility | Partially implemented | Core authenticated planner is localized and responsive; full route/browser acceptance at four widths remains. |
 | Remote RLS and Storage verification | Credential-test-blocked | Nine tests intentionally remain skipped without privileged test credentials. |
 | WhatsApp provider delivery | Provider-blocked | Manual open/copy workflow must remain operational until provider credentials exist. |
