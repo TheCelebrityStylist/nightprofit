@@ -12,7 +12,7 @@ import {createStaffOnboardingToken,hashStaffOnboardingToken,onboardingMessage} f
 const envelope=z.object({
   organisationId:z.string().uuid(),
   locale:z.enum(["nl-NL","en-US"]).default("nl-NL"),
-  action:z.enum(["department","role","forecast","shift","shift_update","shift_cancel","shift_duplicate","shift_lock","shift_bulk","planner_history","template_save","template_apply","break_plan","copy_week","staff","invitation_state","staff_deactivate","absence","absence_decide","open_shift_offer","swap_decide","publish","availability","proposal","proposal_apply","scenario","resolve_action"]),
+  action:z.enum(["department","role","forecast","shift","shift_update","shift_cancel","shift_duplicate","shift_lock","shift_bulk","planner_history","template_save","template_apply","break_plan","copy_week","staff","invitation_state","staff_deactivate","absence","absence_decide","split_replace","open_shift_offer","swap_decide","publish","availability","proposal","proposal_apply","scenario","resolve_action"]),
   values:z.record(z.string(),z.string()),
 });
 const departmentSchema=z.object({venueId:z.string().uuid(),name:z.string().trim().min(2).max(100)});
@@ -34,6 +34,7 @@ const staffDeactivateSchema=z.object({staffId:z.string().uuid()});
 const invitationStateSchema=z.object({venueId:z.string().uuid(),invitationId:z.string().uuid(),state:z.enum(["opened_in_whatsapp","copied"])});
 const absenceSchema=z.object({venueId:z.string().uuid(),staffId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),absenceType:z.enum(["leave","sickness","other"]),note:z.string().trim().max(500)});
 const absenceDecisionSchema=z.object({venueId:z.string().uuid(),absenceId:z.string().uuid(),decision:z.enum(["approved","rejected"]),reason:z.string().trim().min(5).max(1000)});
+const splitReplacementSchema=z.object({venueId:z.string().uuid(),shiftId:z.string().uuid(),absenceId:z.string().uuid(),expectedRevision:z.coerce.number().int().positive(),segments:z.string().transform(value=>z.array(z.object({staff_id:z.string().uuid(),starts_at:z.iso.datetime(),ends_at:z.iso.datetime(),break_minutes:z.number().int().min(0).max(480)})).min(1).max(4).parse(JSON.parse(value))),reason:z.string().trim().min(5).max(1000),idempotencyKey:z.string().uuid()});
 const swapDecisionSchema=z.object({venueId:z.string().uuid(),swapId:z.string().uuid(),decision:z.enum(["approved","rejected"]),reason:z.string().trim().min(3).max(1000)});
 const openShiftOfferSchema=z.object({venueId:z.string().uuid(),shiftId:z.string().uuid(),closesAt:z.iso.datetime({local:true}),idempotencyKey:z.string().uuid()});
 const publishSchema=z.object({venueId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),expectedRevision:z.coerce.number().int().positive(),idempotencyKey:z.string().uuid()});
@@ -94,20 +95,20 @@ export async function POST(request:Request){
         const {data:overlaps}=await supabase.from("shifts").select("id").eq("organisation_id",input.organisationId).eq("staff_id",values.staffId).neq("id",values.shiftId).lt("starts_at",endsAt).gt("ends_at",startsAt).not("status","in","(cancelled,rejected)").limit(1);
         if(overlaps?.length)return NextResponse.json({errorCode:"SHIFT_OVERLAP"},{status:409});
       }
-      const {data,error}=await supabase.from("shifts").update({department_id:values.departmentId,role_id:values.roleId,staff_id:values.staffId==="open"?null:values.staffId,starts_at:startsAt,ends_at:endsAt,break_minutes:values.breakMinutes,hourly_cost_minor:decimalToMinor(values.hourlyCost,input.locale).toString(),status:"draft",source:"manager",created_by:user.id,updated_at:new Date().toISOString(),revision:values.expectedRevision+1}).eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).eq("id",values.shiftId).eq("revision",values.expectedRevision).eq("locked",false).select("id").single();
+      const {data,error}=await supabase.from("shifts").update({department_id:values.departmentId,role_id:values.roleId,staff_id:values.staffId==="open"?null:values.staffId,starts_at:startsAt,ends_at:endsAt,break_minutes:values.breakMinutes,hourly_cost_minor:decimalToMinor(values.hourlyCost,input.locale).toString(),status:"draft",source:"manager",created_by:user.id,updated_at:new Date().toISOString(),revision:values.expectedRevision+1}).eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).eq("id",values.shiftId).eq("status","draft").eq("revision",values.expectedRevision).eq("locked",false).select("id").single();
       if(error||!data)throw error??new Error("CONCURRENT_SHIFT_EDIT");
       return NextResponse.json({message:"Conceptrooster automatisch opgeslagen."});
     }
     if(input.action==="shift_cancel"){
       const values=shiftCancelSchema.parse(input.values);
       const {supabase}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
-      const {data,error}=await supabase.from("shifts").update({status:"cancelled",updated_at:new Date().toISOString()}).eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).eq("id",values.shiftId).select("id").single();
+      const {data,error}=await supabase.from("shifts").update({status:"cancelled",updated_at:new Date().toISOString()}).eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).eq("id",values.shiftId).eq("status","draft").select("id").single();
       if(error||!data)throw error??new Error("SHIFT_NOT_FOUND");
       return NextResponse.json({message:"Dienst verwijderd uit het conceptrooster."});
     }
     if(input.action==="shift_lock"){
       const values=shiftLockSchema.parse(input.values);const {supabase}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
-      const {data,error}=await supabase.from("shifts").update({locked:values.locked==="true",revision:values.expectedRevision+1,updated_at:new Date().toISOString()}).eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).eq("id",values.shiftId).eq("revision",values.expectedRevision).select("id").single();if(error||!data)throw error??new Error("CONCURRENT_SHIFT_EDIT");
+      const {data,error}=await supabase.from("shifts").update({locked:values.locked==="true",revision:values.expectedRevision+1,updated_at:new Date().toISOString()}).eq("organisation_id",input.organisationId).eq("venue_id",values.venueId).eq("id",values.shiftId).eq("status","draft").eq("revision",values.expectedRevision).select("id").single();if(error||!data)throw error??new Error("CONCURRENT_SHIFT_EDIT");
       return NextResponse.json({message:values.locked==="true"?"Dienst vergrendeld tegen roosterwijzigingen.":"Dienst ontgrendeld."});
     }
     if(input.action==="shift_bulk"){
@@ -216,6 +217,11 @@ export async function POST(request:Request){
       const {supabase}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
       const {data,error}=await supabase.rpc("decide_staff_absence" as "clock_out",{target_organisation_id:input.organisationId,target_absence_id:values.absenceId,target_decision:values.decision,target_reason:values.reason} as never);if(error||!data)throw error??new Error("ABSENCE_NOT_FOUND");
       return NextResponse.json({message:"Verlofbesluit opgeslagen; dekking is opnieuw beoordeeld."});
+    }
+    if(input.action==="split_replace"){
+      const values=splitReplacementSchema.parse(input.values);const {supabase}=await requireMembership(input.organisationId,"planning.manage",values.venueId);
+      const {data,error}=await supabase.rpc("replace_published_shift_segments" as "clock_out",{target_organisation_id:input.organisationId,target_shift_id:values.shiftId,target_absence_id:values.absenceId,target_expected_revision:values.expectedRevision,target_segments:values.segments,target_reason:values.reason,target_idempotency_key:values.idempotencyKey} as never);if(error)throw error;
+      return NextResponse.json({message:"Vervanging gevalideerd en als onveranderlijke opvolgversie gepubliceerd.",result:data});
     }
     if(input.action==="swap_decide"){
       const values=swapDecisionSchema.parse(input.values);const {supabase}=await requireMembership(input.organisationId,"planning.manage",values.venueId);

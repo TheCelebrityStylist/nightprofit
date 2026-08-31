@@ -7,6 +7,7 @@ import { AvailabilityManager } from "./availability-manager";
 import { EmployeeCsvImport } from "./employee-csv-import";
 import { utcToZonedInput, zonedInputToUtc } from "@/lib/workforce/timezone";
 import { analyzeRosterConstraints, calculateCoverage, rosterHealth, simulateDemand } from "@/lib/workforce/decision-support";
+import { planReplacementSegments } from "@/lib/workforce/replacement-planner";
 
 type Venue = { id: string; name: string; timezone: string };
 type Department = { id: string; venue_id: string; name: string };
@@ -251,6 +252,17 @@ export function RosterBoard({
   const venueExceptions=workforceExceptions.filter(item=>item.venue_id===venueId).sort((left,right)=>Number(right.rank_score)-Number(left.rank_score)||left.relevant_at.localeCompare(right.relevant_at)||left.action_key.localeCompare(right.action_key));
   const latestLearning=workforceLearning.filter(item=>item.venue_id===venueId).sort((left,right)=>right.created_at.localeCompare(left.created_at))[0];
   const exceptionLabel=(type:string)=>({sickness_coverage:tx("Ziekte raakt gepubliceerde dienst","Sickness affects published shift"),approved_leave_coverage:tx("Goedgekeurd verlof raakt dekking","Approved leave affects coverage"),coverage_gap:tx("Dekkingsgat","Coverage gap"),swap_decision:tx("Ruilbesluit","Swap decision"),time_correction:tx("Tijdcorrectie","Time correction"),submitted_hours:tx("Uren goedkeuren","Approve submitted hours"),open_shift:tx("Open dienst","Open shift"),stale_proposal:tx("Verouderd voorstel","Stale proposal")}[type]??type);
+  const selectedReplacementException=selected?.status==="published"?venueExceptions.find(item=>item.shift_id===selected.id&&(item.exception_type==="sickness_coverage"||item.exception_type==="approved_leave_coverage")):undefined;
+  const selectedReplacementPlan=selected&&selectedReplacementException?planReplacementSegments(
+    {startsAt:selected.starts_at,endsAt:selected.ends_at,breakMinutes:selected.break_minutes},
+    activeStaff.filter(person=>person.id!==selected.staff_id).map(person=>{
+      const qualified=qualifications.some(row=>row.staff_id===person.id&&row.role_id===selected.role_id&&(!row.qualified_until||row.qualified_until>=selected.starts_at.slice(0,10)));
+      const absent=absences.some(row=>row.staff_id===person.id&&row.status!=="rejected"&&new Date(row.starts_at)<new Date(selected.ends_at)&&new Date(row.ends_at)>new Date(selected.starts_at));
+      const restConflict=shifts.some(row=>row.id!==selected.id&&row.staff_id===person.id&&row.status!=="cancelled"&&row.status!=="rejected"&&new Date(row.starts_at).getTime()<new Date(selected.ends_at).getTime()+11*60*60*1000&&new Date(row.ends_at).getTime()>new Date(selected.starts_at).getTime()-11*60*60*1000);
+      const weekMinutes=shifts.filter(row=>row.id!==selected.id&&row.staff_id===person.id&&row.status!=="cancelled"&&row.status!=="rejected"&&new Date(row.starts_at)>=weekStart&&new Date(row.starts_at)<weekEnd).reduce((sum,row)=>sum+Math.max(0,Math.floor((new Date(row.ends_at).getTime()-new Date(row.starts_at).getTime())/60000)-row.break_minutes),0);
+      return {staffId:person.id,name:person.full_name,hourlyCostMinor:BigInt(person.effective_hourly_cost_minor??selected.hourly_cost_minor),eligible:qualified&&!absent&&!restConflict&&(person.maximum_minutes_week==null||weekMinutes<person.maximum_minutes_week),maxWorkMinutes:person.maximum_minutes_week==null?undefined:Math.max(0,person.maximum_minutes_week-weekMinutes),availability:staffAvailability.filter(row=>row.staff_id===person.id&&row.venue_id===selected.venue_id&&row.availability!=="unavailable").map(row=>({startsAt:row.starts_at,endsAt:row.ends_at}))};
+    }),
+  ):null;
 
   async function mutate(action: string, values: Record<string, string>, optimistic?: () => void) {
     setBusy(true);
@@ -783,6 +795,17 @@ export function RosterBoard({
                   label: `${row.full_name} · ${row.role_name}`,
                 }))}
               />
+            ) : panel === "shift" && selected && selectedReplacementException && selectedReplacementPlan ? (
+              <ReplacementPanel
+                row={selected}
+                exception={selectedReplacementException}
+                plan={selectedReplacementPlan}
+                locale={locale}
+                busy={busy}
+                currency={currency}
+                submit={(reason)=>void mutate("split_replace",{venueId:selected.venue_id,shiftId:selected.id,absenceId:selectedReplacementException.source_id,expectedRevision:String(selected.revision??1),segments:JSON.stringify(selectedReplacementPlan.segments.map(({staff_id,starts_at,ends_at,break_minutes})=>({staff_id,starts_at,ends_at,break_minutes}))),reason,idempotencyKey:crypto.randomUUID()},()=>{setPanel(null);router.refresh()})}
+                offerOpenShift={()=>{const latestClose=Math.max(Date.now()+5*60_000,new Date(selected.starts_at).getTime()-15*60_000);void mutate("open_shift_offer",{venueId:selected.venue_id,shiftId:selected.id,closesAt:new Date(latestClose).toISOString(),idempotencyKey:crypto.randomUUID()})}}
+              />
             ) : panel === "shift" && selected ? (
               <ShiftEditor
                 row={selected}
@@ -984,6 +1007,39 @@ function NewShiftEditor({
       </button>
     </form>
   );
+}
+
+function ReplacementPanel({row,exception,plan,locale,busy,currency,submit,offerOpenShift}:{
+  row:Shift;
+  exception:WorkforceException;
+  plan:ReturnType<typeof planReplacementSegments>;
+  locale:string;
+  busy:boolean;
+  currency:(minor:bigint)=>string;
+  submit:(reason:string)=>void;
+  offerOpenShift:()=>void;
+}){
+  const tx=(nl:string,en:string)=>(locale==="nl"?nl:en);
+  const originalMinutes=Math.max(0,Math.floor((new Date(row.ends_at).getTime()-new Date(row.starts_at).getTime())/60_000)-row.break_minutes);
+  const originalCost=(BigInt(row.hourly_cost_minor)*BigInt(originalMinutes)+30n)/60n;
+  const date=(value:string)=>new Date(value).toLocaleString(locale==="nl"?"nl-NL":"en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
+  return <div className="replacement-panel">
+    <span className="eyebrow">{tx("GECONTROLEERDE VERVANGING","GOVERNED REPLACEMENT")}</span>
+    <h3>{tx("Herstel gepubliceerde dekking","Restore published coverage")}</h3>
+    <p>{exception.why_it_matters}</p>
+    <dl><div><dt>{tx("Oorspronkelijke dienst","Original shift")}</dt><dd>{date(row.starts_at)} – {date(row.ends_at)}</dd></div><div><dt>{tx("Bewijs","Evidence")}</dt><dd><code>{exception.action_key}</code></dd></div></dl>
+    {plan.complete?<>
+      <div className="replacement-segments" role="list" aria-label={tx("Voorgestelde vervangingssegmenten","Proposed replacement segments")}>
+        {plan.segments.map((segment,index)=><article key={`${segment.staff_id}-${segment.starts_at}`} role="listitem"><b>{index+1}. {segment.staff_name}</b><span>{date(segment.starts_at)} – {date(segment.ends_at)}</span><small>{segment.break_minutes}m {tx("pauze","break")} · {currency(BigInt(segment.hourly_cost_minor))}/{tx("uur","hour")}</small></article>)}
+      </div>
+      <p className="replacement-cost"><span>{tx("Gepland kosteneffect","Planned cost effect")}</span><strong>{plan.plannedCostMinor-originalCost>=0n?"+":""}{currency(plan.plannedCostMinor-originalCost)}</strong></p>
+      <form onSubmit={event=>{event.preventDefault();submit(String(new FormData(event.currentTarget).get("reason")??""))}}>
+        <label>{tx("Reden voor opvolgversie","Reason for successor version")}<textarea name="reason" required minLength={5} maxLength={1000} defaultValue={tx("Vervanging na gevalideerde afwezigheid","Replacement after validated absence")}/></label>
+        <button className="primary" disabled={busy}>{tx("Valideer en publiceer opvolgversie","Validate and publish successor version")}</button>
+      </form>
+      <small>{tx("De server controleert kwalificatie, beschikbaarheid, rust, overlap en maximumuren opnieuw. De bestaande publicatie blijft in de auditgeschiedenis.","The server rechecks qualification, availability, rest, overlap and maximum hours. The existing publication remains in the audit history.")}</small>
+    </>:<div className="empty-state"><strong>{tx("Geen volledige geldige directe vervanging gevonden.","No complete valid direct replacement found.")}</strong><p>{plan.uncoveredFrom?`${tx("Onbezet vanaf","Uncovered from")} ${date(plan.uncoveredFrom)}.`:""} {tx("Bied de dienst alleen aan medewerkers aan die server-side geschikt zijn.","Offer the shift only to employees who are eligible server-side.")}</p><button type="button" className="primary" disabled={busy} onClick={offerOpenShift}>{tx("Start gecontroleerde open dienst","Start governed open shift")}</button></div>}
+  </div>;
 }
 
 function ShiftEditor({
