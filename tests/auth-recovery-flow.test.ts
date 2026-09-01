@@ -9,6 +9,9 @@ const updatePage = readFileSync(new URL("../app/update-password/page.tsx", impor
 const form = readFileSync(new URL("../app/auth-form.tsx", import.meta.url), "utf8");
 const sessionRoute = readFileSync(new URL("../app/api/auth/session/route.ts", import.meta.url), "utf8");
 const forgotRoute = readFileSync(new URL("../app/api/auth/forgot/route.ts", import.meta.url), "utf8");
+const fragmentBridge = readFileSync(new URL("../app/auth-fragment-bridge.tsx", import.meta.url), "utf8");
+const homePage = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+const forgotPage = readFileSync(new URL("../app/forgot-password/page.tsx", import.meta.url), "utf8");
 const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
 
 describe("Supabase activation and recovery contracts", () => {
@@ -31,6 +34,16 @@ describe("Supabase activation and recovery contracts", () => {
     expect(sessionRoute).toContain("supabase.auth.getUser()");
     expect(sessionRoute).toContain("refreshToken:z.string().min(1).max(8192)");
     expect(sessionRoute).not.toMatch(/console\.(?:log|warn|error)/);
+  });
+
+  it("recovers managed-email fragments that Supabase sends to the site root",()=>{
+    expect(homePage).toContain("<AuthFragmentBridge/>");
+    expect(fragmentBridge).toContain('fragment.get("access_token")');
+    expect(fragmentBridge).toContain('fragment.get("refresh_token")');
+    expect(fragmentBridge).toContain('fetch("/api/auth/session"');
+    expect(fragmentBridge).toContain('window.location.replace(result.redirect||"/update-password")');
+    expect(fragmentBridge).toContain('/forgot-password?error=link_invalid');
+    expect(forgotPage).toContain('error==="link_invalid"?"LINK_INVALID"');
   });
 
   it("creates recovery links that land on the fragment-session password page", () => {
@@ -86,6 +99,7 @@ describe("Supabase activation and recovery contracts", () => {
     for(const key of ["auth.invalidCredentials","auth.providerUnavailable","auth.sessionFailed"] as const){expect(authMessage("nl",key).length).toBeGreaterThan(20);expect(authMessage("en",key).length).toBeGreaterThan(20)}
     expect(form).toContain('mode==="login"&&(errorCode==="AUTH_UNEXPECTED"||errorCode==="PASSWORD_UPDATE_FAILED")');
     expect(form).toContain('return "auth.genericError"');
+    expect(form).toContain('RATE_LIMITED:"auth.tooManyAttempts"');
   });
 
   it("keeps the password page usable at the mobile breakpoint", () => {
