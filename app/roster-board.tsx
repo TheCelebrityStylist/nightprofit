@@ -8,6 +8,7 @@ import { EmployeeCsvImport } from "./employee-csv-import";
 import { utcToZonedInput, zonedInputToUtc } from "@/lib/workforce/timezone";
 import { analyzeRosterConstraints, calculateCoverage, rosterHealth, simulateDemand } from "@/lib/workforce/decision-support";
 import { planReplacementSegments } from "@/lib/workforce/replacement-planner";
+import { normalizeDutchPhone } from "@/lib/workforce/domain";
 
 type Venue = { id: string; name: string; timezone: string };
 type Department = { id: string; venue_id: string; name: string };
@@ -85,6 +86,7 @@ type Proposal = {
   status: string;
   result_summary: {
     coverage_basis_points: number;
+    required_assignments?: number;
     unfilled_assignments: number;
     total_planned_minutes: number;
     planned_cost_minor: string;
@@ -105,6 +107,7 @@ const monday = (value: Date) => {
   date.setDate(date.getDate() - ((date.getDay() + 6) % 7));
   return date;
 };
+const phoneState=(value:string|null|undefined):"valid"|"missing"|"invalid"=>{if(!value)return "missing";try{normalizeDutchPhone(value);return "valid"}catch{return "invalid"}};
 
 export function RosterBoard({
   organisationId,
@@ -164,7 +167,7 @@ export function RosterBoard({
   const [templateId,setTemplateId]=useState("");
   const [templateRepeats,setTemplateRepeats]=useState(1);
   useEffect(()=>{const handle=window.setTimeout(()=>setShifts(initialShifts),0);return()=>window.clearTimeout(handle)},[initialShifts]);
-  const [panel, setPanel] = useState<"shift" | "new" | "team" | "absence" | "availability" | "missed" | "health" | "scenario" | null>(
+  const [panel, setPanel] = useState<"shift" | "new" | "team" | "absence" | "availability" | "missed" | "health" | "scenario" | "publish" | null>(
     null,
   );
   const [newShift, setNewShift] = useState<{
@@ -420,22 +423,8 @@ export function RosterBoard({
           </button>
           <button
             className="primary publish"
-            disabled={busy || !visibleShifts.some((row) => row.status === "draft")}
-            onClick={() =>
-              void mutate("publish", {
-                venueId,
-                startsAt: weekStart.toISOString(),
-                endsAt: weekEnd.toISOString(),
-                expectedRevision: String(
-                  Math.max(
-                    ...visibleShifts
-                      .filter((row) => row.status === "draft")
-                      .map((row) => row.revision ?? 1),
-                  ),
-                ),
-                idempotencyKey: crypto.randomUUID(),
-              })
-            }
+            disabled={busy || !visibleShifts.some((row) => row.status === "draft") || !health.publishable || !visibleIntervals.length || !activeStaff.length}
+            onClick={() => setPanel("publish")}
           >
             {tx("Publiceer", "Publish")}
           </button>
@@ -507,6 +496,7 @@ export function RosterBoard({
         <button type="button" className="primary" disabled={busy||!templateId} onClick={()=>void templateMutate("template_apply")}>{templateRepeats>1?tx("Terugkerende diensten maken","Create recurring shifts"):tx("Template toepassen","Apply template")}</button>
       </section>
       <section className="planner-summary" aria-label={tx("Weekoverzicht", "Week summary")}>
+        <span><small>{tx("Omzetprognose", "Revenue forecast")}</small><b>{visibleIntervals.length ? currency(revenue) : tx("Nog geen omzetprognose", "No revenue forecast yet")}</b></span>
         <span><small>{tx("Dekking", "Coverage")}</small><b>{visibleIntervals.length ? `${coverageIntervals.reduce((sum,row)=>sum+row.plannedStaff,0)} / ${coverageIntervals.reduce((sum,row)=>sum+row.requiredStaff,0)}` : tx("Forecast ontbreekt", "Forecast missing")}</b></span>
         <span><small>{tx("Geplande uren", "Planned hours")}</small><b>{visibleShifts.length ? `${Math.round(visibleShifts.reduce((sum,row)=>sum+Math.max(0,(new Date(row.ends_at).getTime()-new Date(row.starts_at).getTime())/60000-row.break_minutes),0)/6)/10} u` : tx("Nog geen diensten", "No shifts yet")}</b></span>
         <span><small>{tx("Loonkosten", "Labor cost")}</small><b>{visibleShifts.length ? currency(labor) : tx("Nog niet berekend", "Not calculated yet")}</b></span>
@@ -566,7 +556,7 @@ export function RosterBoard({
                   </b>
                   <strong>
                     {(row.result_summary.coverage_basis_points / 100).toFixed(1)}%{" "}
-                    {tx("dekking", "coverage")}
+                    {tx("automatisch ingevuld", "automatically filled")}
                   </strong>
                   <span>
                     {currency(BigInt(row.result_summary.planned_cost_minor))} ·{" "}
@@ -577,6 +567,7 @@ export function RosterBoard({
                     {tx("ongevulde intervallen", "unfilled intervals")} ·{" "}
                     {row.result_summary.preferred_assignments} {tx("voorkeuren", "preferences")}
                   </small>
+                  <p>{row.objective==="balanced"?tx("Verdeelt uren zo gelijk mogelijk binnen contracten en regels.","Distributes hours as evenly as possible within contracts and rules."):row.objective==="lowest_cost"?tx("Beperkt loonkosten en laat duurdere geldige opties alleen staan waar nodig.","Limits labor cost and uses higher-cost valid options only where needed."):tx("Geeft beschikbare voorkeursmomenten voorrang zonder harde regels te breken.","Prioritizes preferred available times without breaking hard rules.")}</p>
                   <button
                     className="primary"
                     disabled={busy}
@@ -631,6 +622,7 @@ export function RosterBoard({
               <small>
                 {coverage[index].planned}/{coverage[index].required} {tx("bezet", "staffed")}
               </small>
+              {coverageIntervals.filter(interval=>interval.gap>0&&new Date(interval.startsAt).toDateString()===day.toDateString()).map(interval=><button type="button" className="interval-gap" key={interval.id} onClick={()=>{if(venueDepartments[0]){setNewShift({day:new Date(interval.startsAt),departmentId:venueDepartments[0].id,staffId:"open"});setPanel("new")}}}><span aria-hidden="true">!</span>{new Date(interval.startsAt).toLocaleTimeString(locale==="nl"?"nl-NL":"en-GB",{hour:"2-digit",minute:"2-digit"})} · {interval.gap} {tx("tekort","missing")}</button>)}
             </div>
           ))}
         </div>
@@ -758,7 +750,21 @@ export function RosterBoard({
             >
               ×
             </button>
-            {panel === "health" ? (
+            {panel === "publish" ? (
+              <section className="context-detail publication-review">
+                <span className="eyebrow">{tx("PUBLICATIECONTROLE", "PUBLICATION REVIEW")}</span>
+                <h3>{tx("Rooster publiceren", "Publish roster")}</h3>
+                <dl>
+                  <div><dt>{tx("Medewerkers met nieuwe of gewijzigde diensten", "Employees with new or changed shifts")}</dt><dd>{new Set(visibleShifts.filter(row=>row.status==="draft"&&row.staff_id).map(row=>row.staff_id)).size}</dd></div>
+                  <div><dt>{tx("Open diensten", "Open shifts")}</dt><dd>{visibleShifts.filter(row=>!row.staff_id).length}</dd></div>
+                  <div><dt>{tx("Waarschuwingen", "Warnings")}</dt><dd>{health.issues.filter(issue=>issue.severity!=="blocking").length}</dd></div>
+                  <div><dt>{tx("Geplande uren", "Planned hours")}</dt><dd>{Math.round(visibleShifts.reduce((sum,row)=>sum+Math.max(0,(new Date(row.ends_at).getTime()-new Date(row.starts_at).getTime())/60000-row.break_minutes),0)/6)/10} u</dd></div>
+                  <div><dt>{tx("Geplande loonkosten", "Planned labor cost")}</dt><dd>{currency(labor)}</dd></div>
+                  <div><dt>{tx("Meldingen", "Notifications")}</dt><dd>{tx("Worden klaargezet; aflevering vereist providerbevestiging", "Will be queued; delivery requires provider confirmation")}</dd></div>
+                </dl>
+                <button type="button" className="primary publish" disabled={busy} onClick={()=>void mutate("publish",{venueId,startsAt:weekStart.toISOString(),endsAt:weekEnd.toISOString(),expectedRevision:String(Math.max(...visibleShifts.filter(row=>row.status==="draft").map(row=>row.revision??1))),idempotencyKey:crypto.randomUUID()},()=>setPanel(null))}>{tx("Controle bevestigd en publiceren", "Confirm review and publish")}</button>
+              </section>
+            ) : panel === "health" ? (
               <section className="context-detail"><span className="eyebrow">{tx("ROOSTERSTATUS", "ROSTER STATUS")}</span><h3>{health.issues.length ? tx("Aandacht nodig", "Needs attention") : tx("Rooster in orde", "Roster clear")}</h3>{health.issues.length?<ul>{health.issues.map(issue=><li key={issue.code}><b>{({coverage:tx("Dekking","Coverage"),compliance:tx("Regels","Rules"),availability:tx("Beschikbaarheid","Availability"),skills:tx("Rollen en vaardigheden","Roles and skills"),budget:tx("Budget","Budget"),hours:tx("Uren","Hours"),preference:tx("Voorkeuren","Preferences"),breaks:tx("Pauzes","Breaks"),evidence:tx("Ontbrekende informatie","Missing information")}[issue.dimension]??issue.dimension)}</b><span>{issue.count} · {issue.severity=== "blocking"?tx("blokkeert publicatie","blocks publication"):tx("controleren","review")}</span></li>)}</ul>:<p>{tx("Er zijn geen bekende blokkades voor deze week.","There are no known blockers for this week.")}</p>}</section>
             ) : panel === "scenario" ? (
               <section className="context-detail"><span className="eyebrow">{tx("SCENARIO TESTEN", "TEST SCENARIO")}</span><h3>{tx("Wat verandert er bij andere drukte?", "What changes with different demand?")}</h3><div className="scenario-buttons">{[-2000,-1000,0,1000,2000].map(value=><button type="button" className={scenarioBasisPoints===value?"active":""} key={value} onClick={()=>{setScenarioBasisPoints(value);if(value)void mutate("scenario",{venueId,startsAt:weekStart.toISOString(),endsAt:weekEnd.toISOString(),demandChangeBasisPoints:String(value),idempotencyKey:crypto.randomUUID()})}}>{value===0?tx("Basis","Baseline"):`${value>0?"+":""}${value/100}%`}</button>)}</div><dl><div><dt>{tx("Benodigde medewerkers","Required staff")}</dt><dd>{(scenario??coverageIntervals).reduce((sum,row)=>sum+row.requiredStaff,0)}</dd></div><div><dt>{tx("Dekkingsgaten","Coverage gaps")}</dt><dd>{(scenario??coverageIntervals).reduce((sum,row)=>sum+row.gap,0)}</dd></div><div><dt>{tx("Geplande loonkosten","Planned labor cost")}</dt><dd>{visibleShifts.length?currency(labor):"—"}</dd></div></dl></section>
@@ -772,6 +778,8 @@ export function RosterBoard({
                 staff={activeStaff.map((row) => ({
                   id: row.id,
                   label: `${row.full_name} · ${row.role_name}`,
+                  phoneState: phoneState(row.contact_phone),
+                  preferredLanguage: row.preferred_language === "en" ? "en" : "nl",
                 }))}
               />
             ) : panel === "shift" && selected && selectedReplacementException && selectedReplacementPlan ? (

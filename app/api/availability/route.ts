@@ -8,7 +8,7 @@ import {assertSameOrigin,securityErrorResponse} from "../../../lib/http/security
 const schema=z.object({
   organisationId:z.string().uuid(),venueId:z.string().uuid(),
   startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),deadlineAt:z.iso.datetime({local:true}),
-  staffIds:z.array(z.string().uuid()).min(1).max(250),
+  staffIds:z.array(z.string().uuid()).min(1).max(250),idempotencyKey:z.string().uuid(),
 });
 
 const updateSchema=z.object({
@@ -46,17 +46,19 @@ export async function POST(request:Request){
       if(person.contact_phone){try{phone=normalizeDutchPhone(person.contact_phone);phoneState="valid"}catch{/* explicitly reported below */}}
       const message=availabilityMessage(person.preferred_language,person.full_name,input.startsAt,input.endsAt,input.deadlineAt,responseUrl);
       shares[person.id]={message,phoneState,whatsappUrl:phone?`https://wa.me/${phone.slice(1)}?text=${encodeURIComponent(message)}`:null};
-      return {staff_id:person.id,token_hash:hashAvailabilityToken(token),response_url:responseUrl,language:person.preferred_language};
+      return {staff_id:person.id,token_hash:hashAvailabilityToken(token),response_url:responseUrl,language:person.preferred_language,phone_state:phoneState,destination_e164:phone};
     });
-    const {data,error}=await supabase.rpc("create_availability_request",{
+    const {data,error}=await supabase.rpc("create_availability_request_v3" as "create_availability_request",{
       target_organisation_id:input.organisationId,target_venue_id:input.venueId,
       target_starts_at:new Date(input.startsAt).toISOString(),target_ends_at:new Date(input.endsAt).toISOString(),
-      target_deadline_at:new Date(input.deadlineAt).toISOString(),recipient_inputs:recipients,
-    });
+      target_deadline_at:new Date(input.deadlineAt).toISOString(),recipient_inputs:recipients,target_idempotency_key:input.idempotencyKey,
+    } as never);
     if(error)throw error;
-    const {data:createdRecipients,error:createdRecipientsError}=await supabase.from("availability_request_recipients").select("id,staff_id").eq("organisation_id",input.organisationId).eq("request_id",data);if(createdRecipientsError)throw createdRecipientsError;
+    const command=data as unknown as {request_id:string;replayed:boolean};
+    if(command.replayed)return NextResponse.json({message:"Dit beschikbaarheidsverzoek was al voorbereid.",requestId:command.request_id,replayed:true,links:{},shares:{},recipientIdsByStaff:{}});
+    const {data:createdRecipients,error:createdRecipientsError}=await supabase.from("availability_request_recipients").select("id,staff_id").eq("organisation_id",input.organisationId).eq("request_id",command.request_id);if(createdRecipientsError)throw createdRecipientsError;
     const recipientIdsByStaff=Object.fromEntries((createdRecipients??[]).map(row=>[row.staff_id,row.id]));
-    return NextResponse.json({message:`Beschikbaarheid voorbereid voor ${recipients.length} medewerker(s). Er is niets extern verstuurd.`,requestId:data,links:Object.fromEntries(links),shares,recipientIdsByStaff},{status:201});
+    return NextResponse.json({message:`Beschikbaarheid voorbereid voor ${recipients.length} medewerker(s). Er is niets extern verstuurd.`,requestId:command.request_id,links:Object.fromEntries(links),shares,recipientIdsByStaff},{status:201});
   }catch(error){
     return securityErrorResponse(error)??NextResponse.json({errorCode:error instanceof z.ZodError?"VALIDATION_FAILED":"AVAILABILITY_REQUEST_FAILED"},{status:400});
   }

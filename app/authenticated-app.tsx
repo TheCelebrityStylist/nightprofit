@@ -1182,6 +1182,8 @@ async function planning(
           staff={staff.map((person) => ({
             id: person.id,
             label: `${person.full_name} · ${person.role_name}`,
+            phoneState: person.contact_phone ? "valid" as const : "missing" as const,
+            preferredLanguage: person.preferred_language === "en" ? "en" as const : "nl" as const,
           }))}
         />
         <RecordPanel
