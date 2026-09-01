@@ -7,6 +7,11 @@ import type { AuthLocale, AuthMessageKey } from "../lib/i18n/authenticated";
 type AuthErrorCode="LINK_INVALID"|"RECOVERY_SESSION_MISSING"|"PASSWORD_POLICY"|"PASSWORD_MISMATCH"|"TOO_MANY_ATTEMPTS"|"AUTH_CONFIGURATION_INCOMPLETE"|"AUTH_NETWORK"|"AUTH_UNEXPECTED"|"PASSWORD_UPDATE_FAILED"|"INVALID_CREDENTIALS"|"INVALID_AUTH_INPUT"|"AUTH_PROVIDER_UNAVAILABLE"|"AUTH_SESSION_FAILED";
 const authErrorMessages:Record<AuthErrorCode,AuthMessageKey>={LINK_INVALID:"auth.linkInvalid",RECOVERY_SESSION_MISSING:"auth.sessionMissing",PASSWORD_POLICY:"auth.passwordPolicy",PASSWORD_MISMATCH:"auth.passwordMismatch",TOO_MANY_ATTEMPTS:"auth.tooManyAttempts",AUTH_CONFIGURATION_INCOMPLETE:"auth.configurationIncomplete",AUTH_NETWORK:"auth.networkError",AUTH_UNEXPECTED:"auth.unexpectedError",PASSWORD_UPDATE_FAILED:"auth.unexpectedError",INVALID_CREDENTIALS:"auth.invalidCredentials",INVALID_AUTH_INPUT:"auth.invalidCredentials",AUTH_PROVIDER_UNAVAILABLE:"auth.providerUnavailable",AUTH_SESSION_FAILED:"auth.sessionFailed"};
 
+export function authErrorMessageKey(mode:"login"|"signup"|"forgot"|"update",errorCode:AuthErrorCode):AuthMessageKey{
+  if(mode==="login"&&(errorCode==="AUTH_UNEXPECTED"||errorCode==="PASSWORD_UPDATE_FAILED"))return "auth.genericError";
+  return authErrorMessages[errorCode];
+}
+
 export function AuthForm({ mode, locale = "nl", initialError }: { mode:"login"|"signup"|"forgot"|"update"; locale?:AuthLocale;initialError?:AuthErrorCode }) {
   return <AuthLocaleProvider initialLocale={locale}><LocalizedAuthForm mode={mode} initialError={initialError}/></AuthLocaleProvider>;
 }
@@ -50,7 +55,7 @@ function LocalizedAuthForm({ mode,initialError }: { mode:"login"|"signup"|"forgo
       {mode!=="forgot"&&<label>{t("auth.password")}<input name="password" type="password" autoComplete={mode==="login"?"current-password":"new-password"} required minLength={10}/></label>}
       {mode==="update"&&<label>{t("auth.confirmPassword")}<input name="confirmPassword" type="password" autoComplete="new-password" required minLength={10}/></label>}
       <button className="primary" disabled={busy||mode==="update"&&!!errorCode} aria-busy={busy}>{busy?t("auth.busy"):mode==="login"?t("auth.login"):mode==="signup"?t("auth.signup"):mode==="forgot"?t("auth.sendReset"):t("auth.updatePassword")}</button>
-      {errorCode&&<div className="form-message error" role="alert" aria-live="assertive">{t(authErrorMessages[errorCode])}</div>}
+      {errorCode&&<div className="form-message error" role="alert" aria-live="assertive">{t(authErrorMessageKey(mode,errorCode))}</div>}
       {message&&<div className="form-message" role="status" aria-live="polite">{message}</div>}
     </form>
     <footer>{mode==="login"?<><Link href="/forgot-password">{t("auth.forgot")}</Link><Link href="/signup">{t("auth.noAccount")}</Link></>:<><Link href="/login">{t("auth.back")}</Link>{mode==="update"&&errorCode?<Link href="/forgot-password">{t("auth.requestNewLink")}</Link>:null}</>}</footer>
