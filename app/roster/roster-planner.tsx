@@ -104,8 +104,8 @@ export function RosterPlanner({ organisation, venues, canManage, canPublish }: P
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(null), 5000); return () => clearTimeout(timer); }, [notice]);
 
   const employeeById = useMemo(() => new Map(employees.map((employee) => [employee.id, employee])), [employees]);
-  const activeEmployees = employees.filter((employee) => employee.active);
-  const scheduled = shifts.filter((shift) => shift.status === "scheduled");
+  const activeEmployees = useMemo(() => employees.filter((employee) => employee.active), [employees]);
+  const scheduled = useMemo(() => shifts.filter((shift) => shift.status === "scheduled"), [shifts]);
   const context = useMemo(() => ({ shifts: scheduled, availability, leave }), [scheduled, availability, leave]);
   const latest = publications[0] ?? null;
   const pendingChanges = shifts.filter((shift) => shift.changed_since_publish && (shift.status === "scheduled" || shift.published_version !== null)).length;
