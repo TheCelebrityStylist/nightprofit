@@ -3,10 +3,12 @@ import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "../lib/supabase/server";
 import { publicEnv } from "../lib/env";
 import { CloseForm } from "./close-form";
+import { RosterPlanner } from "./roster/roster-planner";
 import "./real-app.css";
 
 const navigation = [
   ["Command Center", "/app/dashboard"],
+  ["Team & Rooster", "/app/roster"],
   ["Nightly Close", "/app/close"],
   ["Events", "/app/events"],
   ["Group Bookings", "/app/bookings"],
@@ -41,6 +43,10 @@ export async function AuthenticatedApp({ path }: { path: string }) {
     supabase.from("closing_sessions").select("id,venue_id,trading_date,status").eq("organisation_id", selectedMembership.organisation_id).order("trading_date",{ascending:false}).limit(5),
   ]);
   if (!organisation) redirect("/onboarding");
+  const rosterAccess = path==="/app/roster" ? await Promise.all((["roster.view","roster.manage","roster.publish"] as const).map(async (capability)=>{
+    const { data, error } = await supabase.rpc("has_capability",{ target_organisation_id: organisation.id, target_venue_id: null, required_capability: capability });
+    return !error && data===true;
+  })) : [false,false,false];
   const activeLabel = navigation.find(([, href]) => path===href)?.[0] ?? "Command Center";
   const submitted = closes?.filter((close) => close.status==="submitted").length ?? 0;
   const approved = closes?.filter((close) => close.status==="approved"||close.status==="locked").length ?? 0;
@@ -61,8 +67,11 @@ export async function AuthenticatedApp({ path }: { path: string }) {
         <form action="/api/auth/logout" method="post"><button className="ghost">Uitloggen</button></form>
       </header>
       <div className="content">
+        {path==="/app/roster" ? (rosterAccess[0]
+          ? <RosterPlanner organisation={{ id: organisation.id, name: organisation.name, currency: organisation.currency }} venues={venues ?? []} canManage={rosterAccess[1]} canPublish={rosterAccess[2]} />
+          : <section className="panel"><div className="empty-state"><h2>Geen toegang tot het rooster</h2><p>Je rol geeft geen inzage in roosters en loonkosten. Vraag een eigenaar of beheerder om toegang.</p></div></section>) : <>
         <section className="hero-row">
-          <div><div className="eyebrow">LIVE · SUPABASE</div><h1>{activeLabel}</h1><p>Alle gegevens hieronder zijn beperkt tot je huidige organisatie en toegewezen vestigingen.</p></div>
+          <div><div className="eyebrow">{organisation.name}</div><h1>{activeLabel}</h1><p>Alle gegevens hieronder zijn beperkt tot je huidige organisatie en toegewezen vestigingen.</p></div>
           {path==="/app/close"&&<Link className="primary" href="/app/close/new">Nieuwe afsluiting</Link>}
         </section>
         {path==="/app/close/new"?<section className="panel"><CloseForm organisationId={organisation.id} venues={venues??[]}/></section>:path==="/app/dashboard"?<>
