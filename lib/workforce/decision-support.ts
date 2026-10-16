@@ -111,7 +111,8 @@ export function rosterHealth(input: {
   const issues: HealthIssue[] = [];
   const gaps = input.coverage.reduce((total, interval) => total + interval.gap, 0);
   const overstaffed = input.coverage.reduce((total, interval) => total + interval.overstaffing, 0);
-  if (gaps) issues.push({dimension:"coverage",severity:"blocking",code:"UNCOVERED_INTERVALS",count:gaps,action:"resolve_coverage"});
+  // Running below forecast is a manager decision, not a rule violation: warn, don't block.
+  if (gaps) issues.push({dimension:"coverage",severity:"warning",code:"UNCOVERED_INTERVALS",count:gaps,action:"resolve_coverage"});
   if (overstaffed) issues.push({dimension:"coverage",severity:"warning",code:"OVERSTAFFED_INTERVALS",count:overstaffed,action:"review_overstaffing"});
   if (input.hardConstraintViolations) issues.push({dimension:"compliance",severity:"blocking",code:"HARD_CONSTRAINTS",count:input.hardConstraintViolations,action:"resolve_compliance"});
   if (input.availabilityConflicts) issues.push({dimension:"availability",severity:"blocking",code:"AVAILABILITY_CONFLICTS",count:input.availabilityConflicts,action:"reassign_shift"});
