@@ -25,8 +25,12 @@ export const publicEnv = publicSchema.parse({
   NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || undefined,
 });
 export function serverEnv() {
+  // Bracket access preserves Sites runtime bindings in server bundles.
+  const runtime=process.env;
   return serverSchema.parse({
-    ...publicEnv,
+    NEXT_PUBLIC_SUPABASE_URL: runtime["NEXT_PUBLIC_SUPABASE_URL"] || publicEnv.NEXT_PUBLIC_SUPABASE_URL,
+    NEXT_PUBLIC_SUPABASE_ANON_KEY: runtime["NEXT_PUBLIC_SUPABASE_ANON_KEY"] || publicEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: runtime["NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY"] || publicEnv.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
     SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || undefined,
     STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY || undefined,
     STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET || undefined,

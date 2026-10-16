@@ -1,15 +1,6 @@
 import type { NextConfig } from "next";
 
-// The Base44 preview proxy serves the app at https://3000-$BASE44_PUBLIC_HOST_SUFFIX.
-// vinext's dev origin guard blocks that origin unless it is listed here. Allow it
-// only inside the Base44 sandbox; unchanged elsewhere.
-const base44DevOrigins =
-  process.env.BASE44_PREVIEW_MODE === "1" && process.env.BASE44_PUBLIC_HOST_SUFFIX
-    ? [`3000-${process.env.BASE44_PUBLIC_HOST_SUFFIX}`]
-    : [];
-
 const nextConfig: NextConfig = {
-  allowedDevOrigins: base44DevOrigins,
   async headers() {
     const securityHeaders=[
       {key:"X-Content-Type-Options",value:"nosniff"},

@@ -669,7 +669,7 @@ begin
       organisation_id,closing_session_id,snapshot,content_hash,created_by
     ) values (
       current_close.organisation_id,current_close.id,snapshot_data,
-      encode(extensions.digest(convert_to(snapshot_data::text,'UTF8'),'sha256'),'hex'),auth.uid()
+      encode(digest(convert_to(snapshot_data::text,'UTF8'),'sha256'),'hex'),auth.uid()
     ) on conflict(closing_session_id) do nothing;
   end if;
   return current_close;
