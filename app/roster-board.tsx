@@ -258,6 +258,7 @@ export function RosterBoard({
   const actualLabor=BigInt(latestApprovedLabour?.actual_cost_minor??"0");
   const venueExceptions=workforceExceptions.filter(item=>item.venue_id===venueId).sort((left,right)=>Number(right.rank_score)-Number(left.rank_score)||left.relevant_at.localeCompare(right.relevant_at)||left.action_key.localeCompare(right.action_key));
   const latestLearning=workforceLearning.filter(item=>item.venue_id===venueId).sort((left,right)=>right.created_at.localeCompare(left.created_at))[0];
+  const issueLabel=(code:string)=>({UNCOVERED_INTERVALS:tx("Minder bezetting dan de forecast","Staffing below forecast"),OVERSTAFFED_INTERVALS:tx("Meer bezetting dan de forecast","Staffing above forecast"),HARD_CONSTRAINTS:tx("Rusttijd, overlap of maximale uren geschonden","Rest time, overlap or maximum hours violated"),AVAILABILITY_CONFLICTS:tx("Ingepland zonder beschikbaarheid of tijdens afwezigheid","Scheduled without availability or during absence"),SKILL_CONFLICTS:tx("Ingepland zonder kwalificatie voor de rol","Scheduled without qualification for the role"),LABOR_TARGET_EXCEEDED:tx("Loonkosten boven 20% van de verwachte omzet","Labour cost above 20% of expected revenue"),CONTRACT_HOUR_IMBALANCE:tx("Afwijking van contracturen","Contract hours imbalance"),PREFERENCE_MISSES:tx("Voorkeuren niet gehonoreerd","Preferences not met"),BREAK_COVERAGE_CONFLICTS:tx("Pauzes laten de vloer onbezet","Breaks leave the floor uncovered"),MISSING_EVIDENCE:tx("Geen vraagforecast voor deze week","No demand forecast for this week")} as Record<string,string>)[code]??code.replaceAll("_"," ").toLowerCase();
   const exceptionLabel=(type:string)=>({sickness_coverage:tx("Ziekte raakt gepubliceerde dienst","Sickness affects published shift"),approved_leave_coverage:tx("Goedgekeurd verlof raakt dekking","Approved leave affects coverage"),coverage_gap:tx("Dekkingsgat","Coverage gap"),swap_decision:tx("Ruilbesluit","Swap decision"),time_correction:tx("Tijdcorrectie","Time correction"),submitted_hours:tx("Uren goedkeuren","Approve submitted hours"),open_shift:tx("Open dienst","Open shift"),stale_proposal:tx("Verouderd voorstel","Stale proposal")}[type]??type);
   const selectedReplacementException=selected?.status==="published"?venueExceptions.find(item=>item.shift_id===selected.id&&(item.exception_type==="sickness_coverage"||item.exception_type==="approved_leave_coverage")):undefined;
   const selectedReplacementPlan=selected&&selectedReplacementException?planReplacementSegments(
@@ -423,7 +424,7 @@ export function RosterBoard({
           </button>
           <button
             className="primary publish"
-            disabled={busy || !visibleShifts.some((row) => row.status === "draft") || !health.publishable || !visibleIntervals.length || !activeStaff.length}
+            disabled={busy || !visibleShifts.some((row) => row.status === "draft") || !health.publishable || !activeStaff.length}
             onClick={() => setPanel("publish")}
           >
             {tx("Publiceer", "Publish")}
@@ -508,7 +509,7 @@ export function RosterBoard({
         <article className="roster-health">
           <header><div><span className="eyebrow">ROSTER HEALTH</span><h3>{health.publishable?tx("Geen blokkerende regels","No blocking rules"):tx("Actie vereist vóór publicatie","Action required before publishing")}</h3></div><b className={health.publishable?"health-ok":"health-blocked"}>{health.publishable?tx("Publiceerbaar","Publishable"):tx("Geblokkeerd","Blocked")}</b></header>
           <div className="health-dimensions">{health.dimensions.map(dimension=>{const issues=health.issues.filter(issue=>issue.dimension===dimension);return <button type="button" key={dimension} onClick={()=>{if(issues.some(issue=>issue.code==="UNCOVERED_INTERVALS")&&venueDepartments[0]){setNewShift({day:weekStart,departmentId:venueDepartments[0].id,staffId:"open"});setPanel("new")}}}><span>{dimension}</span><strong>{issues.some(issue=>issue.severity==="blocking")?"!":issues.length?"△":"✓"}</strong><small>{issues.length?`${issues.reduce((sum,issue)=>sum+issue.count,0)} ${tx("punt(en)","issue(s)")}`:tx("in orde","clear")}</small></button>})}</div>
-          {health.issues.length?<ul>{health.issues.slice(0,5).map(issue=><li key={issue.code}><b>{issue.code.replaceAll("_"," ").toLowerCase()}</b><span>{issue.count}</span></li>)}</ul>:<p>{tx("Alle meetbare dimensies zijn binnen de beschikbare evidence in orde.","All measurable dimensions are clear within the available evidence.")}</p>}
+          {health.issues.length?<ul>{health.issues.slice(0,5).map(issue=><li key={issue.code}><b>{issueLabel(issue.code)}</b><span>{issue.count}</span></li>)}</ul>:<p>{tx("Alle meetbare dimensies zijn binnen de beschikbare evidence in orde.","All measurable dimensions are clear within the available evidence.")}</p>}
         </article>
         <article className="what-if">
           <header><div><span className="eyebrow">WHAT IF?</span><h3>{tx("Test vraag zonder het rooster te wijzigen","Test demand without changing the roster")}</h3></div></header>
@@ -758,10 +759,12 @@ export function RosterBoard({
                   <div><dt>{tx("Medewerkers met nieuwe of gewijzigde diensten", "Employees with new or changed shifts")}</dt><dd>{new Set(visibleShifts.filter(row=>row.status==="draft"&&row.staff_id).map(row=>row.staff_id)).size}</dd></div>
                   <div><dt>{tx("Open diensten", "Open shifts")}</dt><dd>{visibleShifts.filter(row=>!row.staff_id).length}</dd></div>
                   <div><dt>{tx("Waarschuwingen", "Warnings")}</dt><dd>{health.issues.filter(issue=>issue.severity!=="blocking").length}</dd></div>
+                  {visibleShifts.some(row=>!row.staff_id&&row.status==="draft")?<div><dt>{tx("Na publicatie", "After publishing")}</dt><dd>{tx("Open diensten worden vacatures. Open de dienst en kies ‘Aanbieden aan team’.", "Open shifts become vacancies. Open the shift and choose ‘Offer to team’.")}</dd></div>:null}
                   <div><dt>{tx("Geplande uren", "Planned hours")}</dt><dd>{Math.round(visibleShifts.reduce((sum,row)=>sum+Math.max(0,(new Date(row.ends_at).getTime()-new Date(row.starts_at).getTime())/60000-row.break_minutes),0)/6)/10} u</dd></div>
                   <div><dt>{tx("Geplande loonkosten", "Planned labor cost")}</dt><dd>{currency(labor)}</dd></div>
                   <div><dt>{tx("Meldingen", "Notifications")}</dt><dd>{tx("Worden klaargezet; aflevering vereist providerbevestiging", "Will be queued; delivery requires provider confirmation")}</dd></div>
                 </dl>
+                {health.issues.some(issue=>issue.severity==="warning")?<ul className="publish-warnings">{health.issues.filter(issue=>issue.severity==="warning").map(issue=><li key={issue.code}><b>{issueLabel(issue.code)}</b> <span>{issue.count}</span></li>)}</ul>:null}
                 <button type="button" className="primary publish" disabled={busy} onClick={()=>void mutate("publish",{venueId,startsAt:weekStart.toISOString(),endsAt:weekEnd.toISOString(),expectedRevision:String(Math.max(...visibleShifts.filter(row=>row.status==="draft").map(row=>row.revision??1))),idempotencyKey:crypto.randomUUID()},()=>setPanel(null))}>{tx("Controle bevestigd en publiceren", "Confirm review and publish")}</button>
               </section>
             ) : panel === "health" ? (
@@ -832,6 +835,7 @@ export function RosterBoard({
                 planBreak={(values)=>{values.startsAt=toUtc(values.breakStartsAt);values.endsAt=toUtc(values.breakEndsAt);void mutate("break_plan",{venueId:selected.venue_id,shiftId:selected.id,startsAt:values.startsAt,endsAt:values.endsAt},()=>router.refresh())}}
                 duplicate={() => void mutate("shift_duplicate",{venueId:selected.venue_id,shiftId:selected.id,idempotencyKey:crypto.randomUUID()},()=>router.refresh())}
                 toggleLock={() => void mutate("shift_lock",{venueId:selected.venue_id,shiftId:selected.id,locked:String(!selected.locked),expectedRevision:String(selected.revision??1)},()=>{setShifts(current=>current.map(item=>item.id===selected.id?{...selected,locked:!selected.locked,revision:(selected.revision??1)+1}:item));setSelected(current=>current?{...current,locked:!current.locked,revision:(current.revision??1)+1}:current)})}
+                offerOpenShift={()=>{const latestClose=Math.max(Date.now()+5*60_000,new Date(selected.starts_at).getTime()-15*60_000);void mutate("open_shift_offer",{venueId:selected.venue_id,shiftId:selected.id,closesAt:new Date(latestClose).toISOString(),idempotencyKey:crypto.randomUUID()},()=>router.refresh())}}
                 cancel={() =>
                   void mutate(
                     "shift_cancel",
@@ -1044,6 +1048,7 @@ function ShiftEditor({
   duplicate,
   toggleLock,
   cancel,
+  offerOpenShift,
 }: {
   row: Shift;
   breakPlan?: BreakPlan;
@@ -1059,8 +1064,11 @@ function ShiftEditor({
   duplicate: () => void;
   toggleLock: () => void;
   cancel: () => void;
+  offerOpenShift: () => void;
 }) {
   const tx = (nl: string, en: string) => (locale === "nl" ? nl : en);
+  const [openedAt] = useState(() => Date.now());
+  const offerable = row.status === "published" && !row.staff_id && new Date(row.starts_at).getTime() > openedAt + 20 * 60_000;
   const breakDuration=Math.max(1,row.break_minutes||30),shiftStart=new Date(row.starts_at).getTime(),shiftEnd=new Date(row.ends_at).getTime();
   const defaultBreakStart=breakPlan?new Date(breakPlan.starts_at):new Date(shiftStart+Math.max(0,Math.floor((shiftEnd-shiftStart-breakDuration*60000)/2))),defaultBreakEnd=breakPlan?new Date(breakPlan.ends_at):new Date(defaultBreakStart.getTime()+breakDuration*60000);
   return (
@@ -1071,6 +1079,13 @@ function ShiftEditor({
       }}
     >
       <h3>{tx("Dienst bewerken", "Edit shift")}</h3>
+      {offerable ? (
+        <section className="context-detail">
+          <span className="eyebrow">{tx("OPEN DIENST", "OPEN SHIFT")}</span>
+          <p>{tx("Deze dienst is gepubliceerd zonder medewerker. Bied hem aan: alleen wie beschikbaar, gekwalificeerd en uitgerust is ziet hem, en de eerste claim krijgt de dienst.", "This shift is published without an employee. Offer it: only people who are available, qualified and rested see it, and the first claim gets the shift.")}</p>
+          <button type="button" className="primary" disabled={busy} onClick={offerOpenShift}>{tx("Aanbieden aan team", "Offer to team")}</button>
+        </section>
+      ) : null}
       <input type="hidden" name="venueId" value={row.venue_id} />
       <input type="hidden" name="shiftId" value={row.id} />
       <input type="hidden" name="expectedRevision" value={row.revision ?? 1} />
