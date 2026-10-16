@@ -423,7 +423,7 @@ export function RosterBoard({
           </button>
           <button
             className="primary publish"
-            disabled={busy || !visibleShifts.some((row) => row.status === "draft") || !health.publishable || !visibleIntervals.length || !activeStaff.length}
+            disabled={busy || !visibleShifts.some((row) => row.status === "draft") || !health.publishable || !activeStaff.length}
             onClick={() => setPanel("publish")}
           >
             {tx("Publiceer", "Publish")}
@@ -832,6 +832,7 @@ export function RosterBoard({
                 planBreak={(values)=>{values.startsAt=toUtc(values.breakStartsAt);values.endsAt=toUtc(values.breakEndsAt);void mutate("break_plan",{venueId:selected.venue_id,shiftId:selected.id,startsAt:values.startsAt,endsAt:values.endsAt},()=>router.refresh())}}
                 duplicate={() => void mutate("shift_duplicate",{venueId:selected.venue_id,shiftId:selected.id,idempotencyKey:crypto.randomUUID()},()=>router.refresh())}
                 toggleLock={() => void mutate("shift_lock",{venueId:selected.venue_id,shiftId:selected.id,locked:String(!selected.locked),expectedRevision:String(selected.revision??1)},()=>{setShifts(current=>current.map(item=>item.id===selected.id?{...selected,locked:!selected.locked,revision:(selected.revision??1)+1}:item));setSelected(current=>current?{...current,locked:!current.locked,revision:(current.revision??1)+1}:current)})}
+                offerOpenShift={()=>{const latestClose=Math.max(Date.now()+5*60_000,new Date(selected.starts_at).getTime()-15*60_000);void mutate("open_shift_offer",{venueId:selected.venue_id,shiftId:selected.id,closesAt:new Date(latestClose).toISOString(),idempotencyKey:crypto.randomUUID()},()=>router.refresh())}}
                 cancel={() =>
                   void mutate(
                     "shift_cancel",
@@ -1044,6 +1045,7 @@ function ShiftEditor({
   duplicate,
   toggleLock,
   cancel,
+  offerOpenShift,
 }: {
   row: Shift;
   breakPlan?: BreakPlan;
@@ -1059,8 +1061,10 @@ function ShiftEditor({
   duplicate: () => void;
   toggleLock: () => void;
   cancel: () => void;
+  offerOpenShift: () => void;
 }) {
   const tx = (nl: string, en: string) => (locale === "nl" ? nl : en);
+  const offerable = row.status === "published" && !row.staff_id && new Date(row.starts_at).getTime() > Date.now() + 20 * 60_000;
   const breakDuration=Math.max(1,row.break_minutes||30),shiftStart=new Date(row.starts_at).getTime(),shiftEnd=new Date(row.ends_at).getTime();
   const defaultBreakStart=breakPlan?new Date(breakPlan.starts_at):new Date(shiftStart+Math.max(0,Math.floor((shiftEnd-shiftStart-breakDuration*60000)/2))),defaultBreakEnd=breakPlan?new Date(breakPlan.ends_at):new Date(defaultBreakStart.getTime()+breakDuration*60000);
   return (
@@ -1071,6 +1075,13 @@ function ShiftEditor({
       }}
     >
       <h3>{tx("Dienst bewerken", "Edit shift")}</h3>
+      {offerable ? (
+        <section className="context-detail">
+          <span className="eyebrow">{tx("OPEN DIENST", "OPEN SHIFT")}</span>
+          <p>{tx("Deze dienst is gepubliceerd zonder medewerker. Bied hem aan: alleen wie beschikbaar, gekwalificeerd en uitgerust is ziet hem, en de eerste claim krijgt de dienst.", "This shift is published without an employee. Offer it: only people who are available, qualified and rested see it, and the first claim gets the shift.")}</p>
+          <button type="button" className="primary" disabled={busy} onClick={offerOpenShift}>{tx("Aanbieden aan team", "Offer to team")}</button>
+        </section>
+      ) : null}
       <input type="hidden" name="venueId" value={row.venue_id} />
       <input type="hidden" name="shiftId" value={row.id} />
       <input type="hidden" name="expectedRevision" value={row.revision ?? 1} />
