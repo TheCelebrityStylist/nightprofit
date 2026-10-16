@@ -17,6 +17,7 @@
 
 - The app runs via `docker-compose.base44.yml` (node:22, source bind-mounted, `npm ci` then `npx vinext dev -H 0.0.0.0 --port 3000`). The dev server must bind 0.0.0.0 to be reachable through the preview proxy.
 - `vite.config.ts` adds `server.allowedHosts: [".${BASE44_SANDBOX_HOST_DOMAIN}"]` only when `BASE44_PREVIEW_MODE === "1"`; the platform also sets `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS`. The proxy forwards `Host: <port>-<sandboxid>.e2b.app`, not the public `base44-preview.app` URL.
+- `next.config.ts` adds `allowedDevOrigins: ["3000-${BASE44_PUBLIC_HOST_SUFFIX}"]` only when `BASE44_PREVIEW_MODE === "1"`. The browser sends `Origin: https://3000-$BASE44_PUBLIC_HOST_SUFFIX` (the public preview URL); vinext's dev origin guard blocks client-side module/HMR requests unless that origin hostname is listed. Both the Host allowlist (vite.config.ts) and the Origin allowlist (next.config.ts) are required — they guard different headers.
 - No secrets are required to boot: the public site (`/`) and synthetic demo (`/demo`) render with no credentials. Authenticated routes (`/app/*`) call Supabase and fail closed (HTTP 500, "Configuration required") until `NEXT_PUBLIC_SUPABASE_URL` + `NEXT_PUBLIC_SUPABASE_ANON_KEY` are supplied — this is intended, do not fake it.
 
 ## Non-negotiable constraints
