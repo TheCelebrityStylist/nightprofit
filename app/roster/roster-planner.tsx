@@ -71,8 +71,11 @@ export function RosterPlanner({ organisation, venues, canManage, canPublish }: P
   const [availability, setAvailability] = useState<RosterAvailabilityRow[]>([]);
   const [leave, setLeave] = useState<RosterLeaveRow[]>([]);
   const [publications, setPublications] = useState<RosterPublicationRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState("");
+  const [reloadToken, setReloadToken] = useState(0);
+  const [loaded, setLoaded] = useState<{ view: string; error: string } | null>(null);
+  const viewKey = `${venueId}|${weekStart}`;
+  const loading = loaded?.view !== viewKey;
+  const loadError = loaded?.view === viewKey ? loaded.error : "";
   const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [shiftDraft, setShiftDraft] = useState<ShiftDraft | null>(null);
@@ -80,9 +83,13 @@ export function RosterPlanner({ organisation, venues, canManage, canPublish }: P
   const [availabilitySource, setAvailabilitySource] = useState<RosterAvailabilityRow["source"]>("whatsapp");
   const [showShare, setShowShare] = useState(false);
 
-  const load = useCallback(async () => {
-    if (!venueId) { setLoading(false); return; }
-    setLoading(true); setLoadError("");
+  const load = useCallback(() => setReloadToken((token) => token + 1), []);
+
+  useEffect(() => {
+    if (!venueId) return;
+    let active = true;
+    const view = `${venueId}|${weekStart}`;
+    void (async () => {
     const [employeeResult, shiftResult, availabilityResult, leaveResult, publicationResult] = await Promise.all([
       supabase.from("roster_employees").select("*").eq("organisation_id", organisation.id).order("full_name"),
       supabase.from("roster_shifts").select("*").eq("venue_id", venueId).gte("service_date", weekStart).lte("service_date", weekEnd).order("starts_at"),
@@ -90,17 +97,19 @@ export function RosterPlanner({ organisation, venues, canManage, canPublish }: P
       supabase.from("roster_leave").select("*").eq("organisation_id", organisation.id).gte("ends_on", weekStart < today ? weekStart : today).order("starts_on"),
       supabase.from("roster_publications").select("*").eq("venue_id", venueId).eq("week_start", weekStart).order("version", { ascending: false }),
     ]);
+    if (!active) return;
     const failed = [employeeResult, shiftResult, availabilityResult, leaveResult, publicationResult].find((result) => result.error);
-    if (failed?.error) { setLoadError(friendlyError(failed.error)); setLoading(false); return; }
+    if (failed?.error) { setLoaded({ view, error: friendlyError(failed.error) }); return; }
     setEmployees(employeeResult.data ?? []);
     setShifts(shiftResult.data ?? []);
     setAvailability(availabilityResult.data ?? []);
     setLeave(leaveResult.data ?? []);
     setPublications(publicationResult.data ?? []);
-    setLoading(false);
-  }, [supabase, organisation.id, venueId, weekStart, weekEnd, today]);
+    setLoaded({ view, error: "" });
+    })();
+    return () => { active = false; };
+  }, [supabase, organisation.id, venueId, weekStart, weekEnd, today, reloadToken]);
 
-  useEffect(() => { void load(); }, [load]);
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(null), 5000); return () => clearTimeout(timer); }, [notice]);
 
   const employeeById = useMemo(() => new Map(employees.map((employee) => [employee.id, employee])), [employees]);
