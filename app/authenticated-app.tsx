@@ -86,6 +86,7 @@ export async function AuthenticatedApp({ path }: { path: string }) {
               <div className="table">{closes.map((close)=><Link href={`/app/close/${close.id}`} className="tr" key={close.id}><span><b>{close.trading_date}</b></span><span>{venues?.find((venue)=>venue.id===close.venue_id)?.name??"Vestiging"}</span><span>{close.status}</span><span>Open bewijs →</span></Link>)}</div>}
           </section>
         </>:<section className="panel"><div className="empty-state"><h2>{activeLabel}</h2><p>Deze beveiligde module bevat geen fictieve klantcijfers. Configureer of importeer geverifieerde gegevens om de workflow te starten.</p></div></section>}
+        </>}
       </div>
     </main>
   </div>;
