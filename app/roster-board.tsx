@@ -1067,7 +1067,8 @@ function ShiftEditor({
   offerOpenShift: () => void;
 }) {
   const tx = (nl: string, en: string) => (locale === "nl" ? nl : en);
-  const offerable = row.status === "published" && !row.staff_id && new Date(row.starts_at).getTime() > Date.now() + 20 * 60_000;
+  const [openedAt] = useState(() => Date.now());
+  const offerable = row.status === "published" && !row.staff_id && new Date(row.starts_at).getTime() > openedAt + 20 * 60_000;
   const breakDuration=Math.max(1,row.break_minutes||30),shiftStart=new Date(row.starts_at).getTime(),shiftEnd=new Date(row.ends_at).getTime();
   const defaultBreakStart=breakPlan?new Date(breakPlan.starts_at):new Date(shiftStart+Math.max(0,Math.floor((shiftEnd-shiftStart-breakDuration*60000)/2))),defaultBreakEnd=breakPlan?new Date(breakPlan.ends_at):new Date(defaultBreakStart.getTime()+breakDuration*60000);
   return (
