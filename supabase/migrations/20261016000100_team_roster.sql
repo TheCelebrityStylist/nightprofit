@@ -23,7 +23,7 @@ create table public.roster_employees (
   organisation_id uuid not null references public.organisations(id) on delete cascade,
   full_name text not null check (length(btrim(full_name)) between 1 and 120),
   phone text check (phone is null or phone ~ '^\+?[0-9 ]{8,20}$'),
-  email extensions.citext,
+  email citext,
   default_role text not null default 'bar' check (length(btrim(default_role)) between 1 and 40),
   hourly_cost_minor bigint not null default 0 check (hourly_cost_minor between 0 and 100000),
   contract_minutes_week integer check (contract_minutes_week is null or contract_minutes_week between 0 and 4800),
