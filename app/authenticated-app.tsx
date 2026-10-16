@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "../lib/supabase/server";
+import { publicEnv } from "../lib/env";
 import { CloseForm } from "./close-form";
 import "./real-app.css";
 
@@ -21,6 +22,9 @@ const navigation = [
 ] as const;
 
 export async function AuthenticatedApp({ path }: { path: string }) {
+  if (!publicEnv.NEXT_PUBLIC_SUPABASE_URL || !publicEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+    redirect(`/login?next=${encodeURIComponent(path)}`);
+  }
   const supabase = await createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect(`/login?next=${encodeURIComponent(path)}`);
