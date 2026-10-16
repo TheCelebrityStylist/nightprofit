@@ -214,14 +214,15 @@ create or replace function public.roster_audit() returns trigger
 language plpgsql security definer set search_path='' as $$
 declare row_data jsonb; before_data jsonb; after_data jsonb; venue uuid;
 begin
-  row_data := to_jsonb(coalesce(new,old));
+  if tg_op='DELETE' then row_data := to_jsonb(old); else row_data := to_jsonb(new); end if;
   before_data := case when tg_op='INSERT' then null else to_jsonb(old) - 'phone' - 'email' - 'hourly_cost_minor' - 'notes' end;
   after_data := case when tg_op='DELETE' then null else to_jsonb(new) - 'phone' - 'email' - 'hourly_cost_minor' - 'notes' end;
   venue := nullif(row_data->>'venue_id','')::uuid;
   insert into public.audit_logs(organisation_id,venue_id,actor_id,action,entity_type,entity_id,before_summary,after_summary,correlation_id,source)
   values((row_data->>'organisation_id')::uuid, venue, auth.uid(), tg_table_name||'.'||lower(tg_op), tg_table_name,
          (row_data->>'id')::uuid, before_data, after_data, gen_random_uuid(), 'database');
-  return coalesce(new,old);
+  if tg_op='DELETE' then return old; end if;
+  return new;
 end $$;
 do $$ declare t text; begin
   foreach t in array array['roster_employees','roster_shifts','roster_leave'] loop
