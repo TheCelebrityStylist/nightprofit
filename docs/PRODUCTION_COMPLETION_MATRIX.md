@@ -24,6 +24,8 @@ Status is evidence-based. “Implemented” never means credential-tested.
 | Security headers and safe errors | Partial | Yes | Build/header tests | `next.config.ts`, server helpers | None |
 | Data export/deletion/retention/AI control | Partial | Schema complete | Remote pending | Migration and settings | Legal owner decisions |
 | Scheduled briefing/email | Incomplete | Boundary only | No | Job tables | Resend/OpenAI/Cron |
+| Team & Roster: employees, weekly roster, open shifts, ranked staffing alternatives, availability, leave/sickness, labour cost, versioned immutable publication, WhatsApp share links | Absent | Yes (`/app/roster`, migration `20261016000100`) | Unit tests (DST, integer cost, ranking) + 32-case PGlite DB contract (`tests/roster-db.check.mjs`) | `lib/roster.ts`, `app/roster/*` | Supabase URL/anon key; migration applied to the live project |
+| Roster: time registration, swaps, employee self-service, automated WhatsApp reminders | Absent | No | No | Not started | WhatsApp Business API for automation |
 | Real authenticated shell | Synthetic app data | Implemented for `/app`; `/demo` remains synthetic | Build verified; deployed auth acceptance pending | `app/authenticated-app.tsx` | Seeded test user |
 | Deployed browser acceptance matrix | Incomplete | No | Pending deploy and test identities | This matrix | Seeded test users |
 
