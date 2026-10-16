@@ -1,0 +1,37 @@
+{
+  "previewPort": 3000,
+  "healthPath": "/",
+  "startCommand": "docker compose -f docker-compose.base44.yml up -d",
+  "secrets": [
+    {
+      "name": "NEXT_PUBLIC_SUPABASE_URL",
+      "description": "Supabase project URL (https://<project>.supabase.co). Required for authenticated app routes; the public site and demo run without it.",
+      "requiredAtBoot": false
+    },
+    {
+      "name": "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+      "description": "Supabase anon/public key. Paired with NEXT_PUBLIC_SUPABASE_URL for client + server auth.",
+      "requiredAtBoot": false
+    },
+    {
+      "name": "SUPABASE_SERVICE_ROLE_KEY",
+      "description": "Supabase service-role key for server-side admin access. Only needed for production adapters.",
+      "requiredAtBoot": false
+    },
+    {
+      "name": "STRIPE_SECRET_KEY",
+      "description": "Stripe secret key (sk_...). Only needed when billing integrations are enabled.",
+      "requiredAtBoot": false
+    },
+    {
+      "name": "STRIPE_WEBHOOK_SECRET",
+      "description": "Stripe webhook signing secret (whsec_...). Only needed when Stripe webhooks are enabled.",
+      "requiredAtBoot": false
+    },
+    {
+      "name": "CRON_SECRET",
+      "description": "High-entropy secret protecting cron routes. Only needed when cron adapters are enabled.",
+      "requiredAtBoot": false
+    }
+  ]
+}

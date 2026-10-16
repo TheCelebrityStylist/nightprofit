@@ -5,6 +5,14 @@ import sites from "./build/sites-vite-plugin";
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 
+// Base44 preview proxy reaches the dev server through a rotating sandbox host.
+// Accept that host only inside the Base44 sandbox; unchanged elsewhere.
+const isBase44Preview = process.env.BASE44_PREVIEW_MODE === "1";
+const base44AllowedHosts =
+  isBase44Preview && process.env.BASE44_SANDBOX_HOST_DOMAIN
+    ? { allowedHosts: [`.${process.env.BASE44_SANDBOX_HOST_DOMAIN}`] }
+    : {};
+
 const localBindingConfig = {
   main: "./worker/index.ts",
   compatibility_flags: ["nodejs_compat"],
@@ -21,9 +29,12 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
-    server: isCodexSeatbeltSandbox
-      ? { watch: { useFsEvents: false, usePolling: true } }
-      : undefined,
+    server: {
+      ...(isCodexSeatbeltSandbox
+        ? { watch: { useFsEvents: false, usePolling: true } }
+        : {}),
+      ...base44AllowedHosts,
+    },
     plugins: [
       vinext(),
       sites(),
