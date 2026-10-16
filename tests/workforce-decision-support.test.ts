@@ -22,7 +22,18 @@ describe("workforce decision support",()=>{
     const coverage=calculateCoverage([requirement],[shift]);
     const health=rosterHealth({coverage,hardConstraintViolations:1,availabilityConflicts:0,skillConflicts:0,laborBasisPoints:1800,targetLaborBasisPoints:1500,hourImbalances:1,preferenceMisses:1,breakConflicts:0,missingEvidence:["bookings"]});
     expect(health.publishable).toBe(false);
-    expect(health.issues.filter(issue=>issue.severity==="blocking").map(issue=>issue.code)).toEqual(["UNCOVERED_INTERVALS","HARD_CONSTRAINTS"]);
+    expect(health.issues.filter(issue=>issue.severity==="blocking").map(issue=>issue.code)).toEqual(["HARD_CONSTRAINTS"]);
+    expect(health.issues.find(issue=>issue.code==="UNCOVERED_INTERVALS")?.severity).toBe("warning");
+  });
+  it("lets a manager publish below forecast as a visible warning, not a block",()=>{
+    const coverage=calculateCoverage([requirement],[shift]);
+    const health=rosterHealth({coverage,hardConstraintViolations:0,availabilityConflicts:0,skillConflicts:0,laborBasisPoints:null,targetLaborBasisPoints:null,hourImbalances:0,preferenceMisses:0,breakConflicts:0,missingEvidence:[]});
+    expect(health.issues.map(issue=>[issue.code,issue.severity])).toContainEqual(["UNCOVERED_INTERVALS","warning"]);
+    expect(health.publishable).toBe(true);
+  });
+  it("still blocks availability and qualification conflicts",()=>{
+    const health=rosterHealth({coverage:[],hardConstraintViolations:0,availabilityConflicts:1,skillConflicts:1,laborBasisPoints:null,targetLaborBasisPoints:null,hourImbalances:0,preferenceMisses:0,breakConflicts:0,missingEvidence:[]});
+    expect(health.publishable).toBe(false);
   });
   it("simulates demand without mutating authoritative coverage",()=>{
     const coverage=calculateCoverage([requirement],[shift]);
