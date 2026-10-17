@@ -9,9 +9,11 @@ import { utcToZonedInput, zonedInputToUtc } from "@/lib/workforce/timezone";
 import { analyzeRosterConstraints, calculateCoverage, rosterHealth, simulateDemand } from "@/lib/workforce/decision-support";
 import { planReplacementSegments } from "@/lib/workforce/replacement-planner";
 import { normalizeDutchPhone } from "@/lib/workforce/domain";
+import { isoWeekday, patternHeadcount, type LaneKind, type ServicePattern } from "@/lib/workforce/service-nights";
+import { ServiceNightsPanel } from "./service-nights";
 
 type Venue = { id: string; name: string; timezone: string };
-type Department = { id: string; venue_id: string; name: string };
+type Department = { id: string; venue_id: string; name: string; kind?: LaneKind };
 type Role = {
   id: string;
   department_id: string;
@@ -35,6 +37,7 @@ type Staff = {
   minimum_minutes_week?:number|null;
   maximum_minutes_week?: number | null;
   preferences?: Record<string,unknown>;
+  auth_user_id?: string | null;
 };
 type StaffAvailability={staff_id:string;venue_id:string;starts_at:string;ends_at:string;availability:"available"|"preferred"|"preferably_not"|"unavailable";submitted_at:string|null;source:string};
 type Qualification={staff_id:string;role_id:string;qualified_until:string|null};
@@ -134,6 +137,9 @@ export function RosterBoard({
   workforceExceptions,
   workforceLearning,
   proposals,
+  servicePatterns = [],
+  plannerUserIds = [],
+  canManageMembers = false,
 }: {
   organisationId: string;
   venues: Venue[];
@@ -154,6 +160,9 @@ export function RosterBoard({
   workforceExceptions:WorkforceException[];
   workforceLearning:WorkforceLearning[];
   proposals: Proposal[];
+  servicePatterns?: ServicePattern[];
+  plannerUserIds?: string[];
+  canManageMembers?: boolean;
 }) {
   const { locale } = useAuthLocale(),
     router = useRouter();
@@ -172,7 +181,7 @@ export function RosterBoard({
   const [templateId,setTemplateId]=useState("");
   const [templateRepeats,setTemplateRepeats]=useState(1);
   useEffect(()=>{const handle=window.setTimeout(()=>setShifts(initialShifts),0);return()=>window.clearTimeout(handle)},[initialShifts]);
-  const [panel, setPanel] = useState<"shift" | "new" | "team" | "absence" | "availability" | "missed" | "health" | "scenario" | "publish" | "templates" | "share" | null>(
+  const [panel, setPanel] = useState<"shift" | "new" | "team" | "absence" | "availability" | "missed" | "health" | "scenario" | "publish" | "templates" | "share" | "nights" | null>(
     null,
   );
   const [tab, setTab] = useState<"roster" | "actions" | "insights" | "hours">("roster");
@@ -194,13 +203,20 @@ export function RosterBoard({
     [weekStart],
   );
   const weekEnd = new Date(weekStart.getTime() + 7 * dayMs);
-  const visibleShifts = shifts.filter(
+  const [lane, setLane] = useState<LaneKind>("staff");
+  const laneOfDepartment = (departmentId: string): LaneKind => departments.find((row) => row.id === departmentId)?.kind === "dj" ? "dj" : "staff";
+  const laneOfRole = (roleId: string): LaneKind => laneOfDepartment(roles.find((row) => row.id === roleId)?.department_id ?? "");
+  const hasDjLane = departments.some((row) => row.venue_id === venueId && row.kind === "dj");
+  const activeLane: LaneKind = hasDjLane ? lane : "staff";
+  const weekShifts = shifts.filter(
     (row) =>
       row.venue_id === venueId &&
       new Date(row.starts_at) >= weekStart &&
       new Date(row.starts_at) < weekEnd &&
       row.status !== "cancelled",
   );
+  const staffShifts = weekShifts.filter((row) => laneOfDepartment(row.department_id) === "staff");
+  const visibleShifts = weekShifts.filter((row) => laneOfDepartment(row.department_id) === activeLane);
   const visibleIntervals = intervals.filter(
     (row) =>
       row.venue_id === venueId &&
@@ -208,8 +224,9 @@ export function RosterBoard({
       new Date(row.starts_at) < weekEnd,
   );
   const visibleBreakPlans=breakPlans.filter(plan=>plan.venue_id===venueId&&visibleShifts.some(shift=>shift.id===plan.shift_id)&&plan.status!=="cancelled");
-  const breakConflicts=visibleIntervals.filter(interval=>{const assigned=visibleShifts.filter(shift=>shift.staff_id&&new Date(shift.starts_at)<new Date(interval.ends_at)&&new Date(shift.ends_at)>new Date(interval.starts_at));const onBreak=new Set(visibleBreakPlans.filter(plan=>new Date(plan.starts_at)<new Date(interval.ends_at)&&new Date(plan.ends_at)>new Date(interval.starts_at)).map(plan=>plan.shift_id));return assigned.length>=interval.required_staff&&assigned.filter(shift=>!onBreak.has(shift.id)).length<interval.required_staff;}).length;
-  const venueDepartments = departments.filter((row) => row.venue_id === venueId);
+  const breakConflicts=visibleIntervals.filter(interval=>{const assigned=staffShifts.filter(shift=>shift.staff_id&&new Date(shift.starts_at)<new Date(interval.ends_at)&&new Date(shift.ends_at)>new Date(interval.starts_at));const onBreak=new Set(visibleBreakPlans.filter(plan=>new Date(plan.starts_at)<new Date(interval.ends_at)&&new Date(plan.ends_at)>new Date(interval.starts_at)).map(plan=>plan.shift_id));return assigned.length>=interval.required_staff&&assigned.filter(shift=>!onBreak.has(shift.id)).length<interval.required_staff;}).length;
+  const allVenueDepartments = departments.filter((row) => row.venue_id === venueId);
+  const venueDepartments = allVenueDepartments.filter((row) => (row.kind === "dj" ? "dj" : "staff") === activeLane);
   const activeStaff = staff.filter((row) => row.onboarding_status !== "suspended");
   const displayedDepartments = venueDepartments.filter((row) => !departmentFilter || row.id === departmentFilter);
   const displayedStaff = activeStaff.filter((row) => row.full_name.toLocaleLowerCase(locale).includes(employeeSearch.trim().toLocaleLowerCase(locale)));
@@ -217,7 +234,7 @@ export function RosterBoard({
     (sum, row) => sum + BigInt(row.expected_revenue_minor),
     0n,
   );
-  const labor = visibleShifts.reduce((sum, row) => {
+  const labor = weekShifts.reduce((sum, row) => {
     const minutes = Math.max(
       0,
       Math.floor((new Date(row.ends_at).getTime() - new Date(row.starts_at).getTime()) / 60000) -
@@ -234,17 +251,17 @@ export function RosterBoard({
   const percent = revenue ? `${Number((labor * 10000n) / revenue) / 100}%` : "—";
   const coverageIntervals = calculateCoverage(
     visibleIntervals.map((row) => ({id:row.id,startsAt:row.starts_at,endsAt:row.ends_at,roleId:"all",requiredStaff:row.required_staff,expectedRevenueMinor:BigInt(row.expected_revenue_minor)})),
-    visibleShifts.map((row) => ({id:row.id,startsAt:row.starts_at,endsAt:row.ends_at,roleId:"all",staffId:row.staff_id,hourlyCostMinor:BigInt(row.hourly_cost_minor),breakMinutes:row.break_minutes})),
+    staffShifts.map((row) => ({id:row.id,startsAt:row.starts_at,endsAt:row.ends_at,roleId:"all",staffId:row.staff_id,hourlyCostMinor:BigInt(row.hourly_cost_minor),breakMinutes:row.break_minutes})),
   );
   const scenario = scenarioBasisPoints ? simulateDemand(coverageIntervals, scenarioBasisPoints) : null;
-  const constraints=analyzeRosterConstraints(visibleShifts.map(shift=>({id:shift.id,staffId:shift.staff_id,startsAt:shift.starts_at,endsAt:shift.ends_at,breakMinutes:shift.break_minutes})),activeStaff.map(person=>({id:person.id,maximumMinutes:person.maximum_minutes_week??null})));
-  const availabilityConflicts=visibleShifts.filter(shift=>{
+  const constraints=analyzeRosterConstraints(weekShifts.map(shift=>({id:shift.id,staffId:shift.staff_id,startsAt:shift.starts_at,endsAt:shift.ends_at,breakMinutes:shift.break_minutes})),activeStaff.map(person=>({id:person.id,maximumMinutes:person.maximum_minutes_week??null})));
+  const availabilityConflicts=weekShifts.filter(shift=>{
     if(!shift.staff_id)return false;
     if(absences.some(absence=>absence.staff_id===shift.staff_id&&absence.status!=="rejected"&&new Date(absence.starts_at)<new Date(shift.ends_at)&&new Date(absence.ends_at)>new Date(shift.starts_at)))return true;
     const availability=staffAvailability.find(row=>row.staff_id===shift.staff_id&&row.venue_id===venueId&&new Date(row.starts_at)<=new Date(shift.starts_at)&&new Date(row.ends_at)>=new Date(shift.ends_at));
     return !availability||availability.availability==="unavailable";
   }).length;
-  const skillConflicts=visibleShifts.filter(shift=>shift.staff_id&&!qualifications.some(row=>row.staff_id===shift.staff_id&&row.role_id===shift.role_id&&(!row.qualified_until||row.qualified_until>=shift.starts_at.slice(0,10)))).length;
+  const skillConflicts=weekShifts.filter(shift=>shift.staff_id&&!qualifications.some(row=>row.staff_id===shift.staff_id&&row.role_id===shift.role_id&&(!row.qualified_until||row.qualified_until>=shift.starts_at.slice(0,10)))).length;
   const hourImbalances=activeStaff.filter(person=>person.contracted_minutes_week!=null&&Math.abs((constraints.minutesByStaff.get(person.id)??0)-person.contracted_minutes_week)>=60).length;
   const health = rosterHealth({
     coverage: coverageIntervals,
@@ -318,6 +335,16 @@ export function RosterBoard({
     }
     return undefined;
   }
+  async function applyStandardWeek(){
+    setBusy(true);setMessage("");
+    try{
+      const local=`${weekStart.getFullYear()}-${String(weekStart.getMonth()+1).padStart(2,"0")}-${String(weekStart.getDate()).padStart(2,"0")}`;
+      const response=await fetch("/api/planning/nights",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({organisationId,action:"week_apply",values:{venueId,weekStart:local}})});
+      const result=await response.json() as {message?:string;errorCode?:string};
+      if(!response.ok)throw new Error(result.errorCode==="FORBIDDEN"?tx("Je hebt geen planningsrechten.","You don't have planning rights."):tx("Standaardweek invullen mislukt.","Filling the standard week failed."));
+      setMessage(result.message??tx("Standaardweek ingevuld.","Standard week filled."));router.refresh();
+    }catch(error){setMessage(error instanceof Error?error.message:tx("Mislukt.","Failed."))}finally{setBusy(false)}
+  }
   async function workforceMutate(action:string,values:Record<string,string>){
     setBusy(true);setMessage("");try{const response=await fetch("/api/workforce",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({organisationId,action,values})});const result=await response.json() as {message?:string};if(!response.ok)throw new Error(tx("De urenactie kon niet worden opgeslagen.","The hours action could not be saved."));setMessage(result.message??tx("Opgeslagen.","Saved."));router.refresh()}catch(error){setMessage(error instanceof Error?error.message:tx("Opslaan mislukt.","Save failed."))}finally{setBusy(false)}
   }
@@ -389,27 +416,39 @@ export function RosterBoard({
       setSelected(next);
     });
   }
+  const venuePatterns = servicePatterns.filter((row) => row.venue_id === venueId);
+  const standardWeekReady = venuePatterns.some((row) => row.active);
+  const standardMissing = days.reduce((sum, day) => {
+    const pattern = venuePatterns.find((row) => row.iso_weekday === isoWeekday(day));
+    if (!pattern?.active) return sum;
+    return sum + pattern.lines.reduce((lineSum, line) => {
+      const [startHour, startMinute] = line.start.split(":").map(Number);
+      const present = weekShifts.filter((row) => row.role_id === line.role_id && new Date(row.starts_at).toDateString() === day.toDateString() && new Date(row.starts_at).getHours() === startHour && new Date(row.starts_at).getMinutes() === startMinute).length;
+      return lineSum + Math.max(0, line.count - present);
+    }, 0);
+  }, 0);
   const coverage = days.map((day) => {
     const end = new Date(day.getTime() + dayMs);
-    const required = visibleIntervals
+    const forecast = activeLane === "staff" ? visibleIntervals
       .filter((row) => new Date(row.starts_at) >= day && new Date(row.starts_at) < end)
-      .reduce((max, row) => Math.max(max, row.required_staff), 0);
+      .reduce((max, row) => Math.max(max, row.required_staff), 0) : 0;
+    const required = Math.max(forecast, patternHeadcount(venuePatterns.find((row) => row.iso_weekday === isoWeekday(day)), laneOfRole, activeLane));
     const planned = visibleShifts.filter(
-      (row) => new Date(row.starts_at) >= day && new Date(row.starts_at) < end,
+      (row) => row.staff_id && new Date(row.starts_at) >= day && new Date(row.starts_at) < end,
     ).length;
     return { required, planned };
   });
 
-  const draftCount = visibleShifts.filter((row) => row.status === "draft").length;
+  const draftCount = weekShifts.filter((row) => row.status === "draft").length;
+  const laneDraftCount = (kind: LaneKind) => weekShifts.filter((row) => row.status === "draft" && laneOfDepartment(row.department_id) === kind).length;
   const blockingCount = health.issues.filter((issue) => issue.severity === "blocking").length;
-  const publishedCount = visibleShifts.filter((row) => row.status === "published").length;
-  const teamReady = venueDepartments.length > 0 && roles.length > 0 && activeStaff.length > 0;
+  const publishedCount = weekShifts.filter((row) => row.status === "published").length;
+  const teamReady = allVenueDepartments.length > 0 && roles.length > 0 && activeStaff.length > 0;
   const weekState: "setup" | "empty" | "draft" | "published" = !teamReady ? "setup" : draftCount ? "draft" : publishedCount ? "published" : "empty";
   const weekStateLabel = { setup: tx("Team nog niet ingesteld", "Team not set up"), empty: tx("Nog leeg", "Empty"), draft: tx("Concept · niet zichtbaar voor team", "Draft · not visible to team"), published: tx("Gepubliceerd", "Published") }[weekState];
   const previousWeekStart = new Date(weekStart.getTime() - 7 * dayMs);
   const previousWeekCount = shifts.filter((row) => row.venue_id === venueId && row.status !== "cancelled" && new Date(row.starts_at) >= previousWeekStart && new Date(row.starts_at) < weekStart).length;
   const weekAvailability = staffAvailability.filter((row) => row.venue_id === venueId && new Date(row.starts_at) < weekEnd && new Date(row.ends_at) > weekStart);
-  const respondedStaff = new Set(weekAvailability.map((row) => row.staff_id)).size;
   const availabilityOn = (staffId: string, day: Date) => {
     const end = new Date(day.getTime() + dayMs);
     const states = weekAvailability.filter((row) => row.staff_id === staffId && new Date(row.starts_at) < end && new Date(row.ends_at) > day).map((row) => row.availability);
@@ -426,7 +465,7 @@ export function RosterBoard({
     const knownRole = roles.some((role) => role.name === person.role_name);
     return !knownRole || roles.some((role) => role.department_id === departmentId && role.name === person.role_name) || visibleShifts.some((row) => row.staff_id === person.id && row.department_id === departmentId);
   };
-  const quietDays = days.map((day, index) => dayTotals[index].minutes === 0 && !dayTotals[index].open && !visibleIntervals.some((row) => new Date(row.starts_at).toDateString() === day.toDateString()));
+  const quietDays = days.map((day, index) => dayTotals[index].minutes === 0 && !dayTotals[index].open && !weekShifts.some((row) => new Date(row.starts_at).toDateString() === day.toDateString()) && !venuePatterns.some((row) => row.active && row.iso_weekday === isoWeekday(day)) && !visibleIntervals.some((row) => new Date(row.starts_at).toDateString() === day.toDateString()));
   const collapseQuiet = quietDays.some((quiet) => !quiet);
   const gridStyle = { gridTemplateColumns: `190px ${quietDays.map((quiet) => (collapseQuiet && quiet ? "64px" : "minmax(130px,1fr)")).join(" ")}`, minWidth: `${190 + quietDays.reduce((sum, quiet) => sum + (collapseQuiet && quiet ? 64 : 130), 0)}px` };
   const firstBusyDay = dayTotals.findIndex((total) => total.count > 0);
@@ -435,7 +474,9 @@ export function RosterBoard({
   const mobileShifts = visibleShifts.filter((shift) => new Date(shift.starts_at).toDateString() === days[mobileIndex].toDateString()).sort((a, b) => a.starts_at.localeCompare(b.starts_at));
   const venueName = venues.find((row) => row.id === venueId)?.name ?? "";
   const zonedTime = (value: string, options: Intl.DateTimeFormatOptions) => new Date(value).toLocaleString(locale === "nl" ? "nl-NL" : "en-GB", { timeZone: venueTimezone, ...options });
-  const shareRows = activeStaff.map((person) => {
+  const laneStaff = activeStaff.filter((person) => venueDepartments.some((department) => staffInDepartment(person, department.id)) && (activeLane === "dj" ? roles.some((role) => role.name === person.role_name && laneOfRole(role.id) === "dj") : !roles.some((role) => role.name === person.role_name && laneOfRole(role.id) === "dj")));
+  const laneLabel = (kind: LaneKind) => kind === "dj" ? tx("DJ's", "DJs") : tx("Personeel", "Staff");
+  const shareRows = laneStaff.map((person) => {
     const rows = visibleShifts.filter((row) => row.staff_id === person.id && row.status === "published").sort((a, b) => a.starts_at.localeCompare(b.starts_at));
     const minutes = rows.reduce((sum, row) => sum + shiftMinutes(row), 0);
     const lines = rows.map((row) => `• ${zonedTime(row.starts_at, { weekday: "short", day: "numeric", month: "short" })} ${zonedTime(row.starts_at, { hour: "2-digit", minute: "2-digit" })}–${zonedTime(row.ends_at, { hour: "2-digit", minute: "2-digit" })} · ${roles.find((role) => role.id === row.role_id)?.name ?? ""}`);
@@ -452,16 +493,18 @@ export function RosterBoard({
       <header className="planner-head">
         <div className="planner-title">
           <h2>{tx("Rooster", "Roster")}</h2>
-          <p><span>{tx("Week","Week")} {isoWeek(weekStart)}</span><span className={`week-state ${weekState}`}>{weekStateLabel}</span>{teamReady?<span>{tx("Beschikbaarheid","Availability")} {respondedStaff}/{activeStaff.length}</span>:null}</p>
+          <p><span>{tx("Week","Week")} {isoWeek(weekStart)}</span><span className={`week-state ${weekState}`}>{weekStateLabel}</span>{teamReady?<span>{tx("Beschikbaarheid","Availability")} {laneStaff.filter((person) => weekAvailability.some((row) => row.staff_id === person.id)).length}/{laneStaff.length}{hasDjLane ? ` · ${laneLabel(activeLane)}` : ""}</span>:null}</p>
         </div>
         <div className="planner-head-actions">
-          {teamReady?<button type="button" onClick={() => setPanel("availability")}>{tx("Beschikbaarheid opvragen", "Request availability")}</button>:null}
+          {teamReady||allVenueDepartments.length?<button type="button" onClick={() => setPanel("nights")}>{tx("Avonden", "Nights")}</button>:null}
+          {teamReady?<button type="button" onClick={() => setPanel("availability")}>{hasDjLane&&activeLane==="dj"?tx("DJ's vragen", "Ask DJs"):tx("Beschikbaarheid opvragen", "Request availability")}</button>:null}
           {weekState==="setup"?<button type="button" className="primary" onClick={()=>setPanel("team")}>{tx("Team instellen","Set up team")}</button>
+          :weekState==="empty"&&standardWeekReady&&standardMissing?<button type="button" className="primary" disabled={busy} onClick={()=>void applyStandardWeek()}>{tx(`Standaardweek invullen (${standardMissing})`,`Fill standard week (${standardMissing})`)}</button>
           :weekState==="empty"?(previousWeekCount?<button type="button" className="primary" disabled={busy} onClick={() => void mutate("copy_week", {venueId,startsAt:new Date(weekStart.getTime()-7*dayMs).toISOString(),endsAt:weekStart.toISOString(),idempotencyKey:crypto.randomUUID()})}>{tx(`Kopieer vorige week (${previousWeekCount})`,`Copy last week (${previousWeekCount})`)}</button>
             :visibleIntervals.length?<button type="button" className="primary" disabled={busy} onClick={()=>void mutate("proposal",{venueId,startsAt:weekStart.toISOString(),endsAt:weekEnd.toISOString()})}>{tx("Rooster voorstellen","Suggest roster")}</button>
             :<button type="button" className="primary" onClick={()=>{if(venueDepartments[0]){setNewShift({day:weekStart,departmentId:venueDepartments[0].id,staffId:"open"});setPanel("new")}}}>{tx("Eerste dienst toevoegen","Add first shift")}</button>)
           :weekState==="draft"?(health.publishable
-            ?<button type="button" className="primary publish" disabled={busy} onClick={() => setPanel("publish")}>{tx(`Publiceren · ${draftCount} ${draftCount===1?"wijziging":"wijzigingen"}`,`Publish · ${draftCount} ${draftCount===1?"change":"changes"}`)}</button>
+            ?<button type="button" className="primary publish" disabled={busy} onClick={() => setPanel("publish")}>{hasDjLane&&laneDraftCount("dj")&&laneDraftCount("staff")?tx(`Publiceren · ${laneDraftCount("staff")} personeel + ${laneDraftCount("dj")} DJ`,`Publish · ${laneDraftCount("staff")} staff + ${laneDraftCount("dj")} DJ`):tx(`Publiceren · ${draftCount} ${draftCount===1?"wijziging":"wijzigingen"}`,`Publish · ${draftCount} ${draftCount===1?"change":"changes"}`)}</button>
             :<button type="button" className="primary blocked" onClick={() => setPanel("health")}>{tx(`${blockingCount} ${blockingCount===1?"blokkade":"blokkades"} vóór publiceren`,`${blockingCount} ${blockingCount===1?"blocker":"blockers"} before publishing`)}</button>)
           :<button type="button" className="primary" onClick={()=>setPanel("share")}>{tx("Delen via WhatsApp","Share via WhatsApp")}</button>}
         </div>
@@ -481,7 +524,8 @@ export function RosterBoard({
             ))}
           </select>
         </label> : null}
-        <label>{tx("Afdeling", "Department")}<select value={departmentFilter} onChange={(event)=>setDepartmentFilter(event.target.value)}><option value="">{tx("Alle afdelingen", "All departments")}</option>{venueDepartments.map(row=><option value={row.id} key={row.id}>{row.name}</option>)}</select></label>
+        {hasDjLane?<div className="lane-switch" role="tablist" aria-label={tx("Planning","Planning")}>{(["staff","dj"] as const).map((kind)=><button type="button" role="tab" key={kind} aria-selected={activeLane===kind} className={activeLane===kind?"active":""} onClick={()=>{setLane(kind);setDepartmentFilter("");setSelectedIds([])}}>{laneLabel(kind)}{laneDraftCount(kind)?<em>{laneDraftCount(kind)}</em>:null}</button>)}</div>:null}
+        {venueDepartments.length>1?<label>{tx("Afdeling", "Department")}<select value={departmentFilter} onChange={(event)=>setDepartmentFilter(event.target.value)}><option value="">{tx("Alle afdelingen", "All departments")}</option>{venueDepartments.map(row=><option value={row.id} key={row.id}>{row.name}</option>)}</select></label>:null}
         <label>{tx("Medewerker zoeken", "Search employee")}<input type="search" value={employeeSearch} onChange={(event)=>setEmployeeSearch(event.target.value)} placeholder={tx("Naam…", "Name…")}/></label>
         <div className="week-switch">
           <button
@@ -516,6 +560,7 @@ export function RosterBoard({
           <button type="button" disabled={busy} onClick={() => void mutate("copy_week", {venueId,startsAt:new Date(weekStart.getTime()-7*dayMs).toISOString(),endsAt:weekStart.toISOString(),idempotencyKey:crypto.randomUUID()})}>{tx("Vorige week kopiëren", "Copy previous week")}</button>
           <button type="button" onClick={() => setPanel("absence")}>{tx("Verlof en ziekte", "Leave and sickness")}</button>
           <button type="button" onClick={() => setPanel("scenario")}>{tx("Scenario testen", "Test scenario")}</button>
+          <button type="button" onClick={() => setPanel("nights")}>{tx("Standaardweek en extra avonden", "Standard week and extra nights")}</button>
           <button type="button" onClick={() => setPanel("templates")}>{tx("Templates en herhaling", "Templates and recurrence")}</button>
           <button type="button" onClick={() => setPanel("share")}>{tx("Rooster delen via WhatsApp", "Share roster via WhatsApp")}</button>
           <button type="button" onClick={() => setPanel("team")}>{tx("Team en rollen", "Team and roles")}</button>
@@ -534,11 +579,17 @@ export function RosterBoard({
       </section>
       </>:null}
       <section className="planner-summary" aria-label={tx("Weekoverzicht", "Week summary")}>
+        {activeLane==="dj"?<>
+        <span><small>{tx("DJ's ingepland", "DJs booked")}</small><b>{coverage.reduce((sum,row)=>sum+row.planned,0)} / {coverage.reduce((sum,row)=>sum+row.required,0)}</b></span>
+        <span><small>{tx("DJ-uren", "DJ hours")}</small><b>{Math.round(visibleShifts.reduce((sum,row)=>sum+shiftMinutes(row),0)/6)/10} u</b></span>
+        <span><small>{tx("DJ-kosten", "DJ cost")}</small><b>{currency(visibleShifts.reduce((sum,row)=>sum+(BigInt(row.hourly_cost_minor)*BigInt(shiftMinutes(row))+30n)/60n,0n))}</b></span>
+        </>:<>
         <span><small>{tx("Omzetprognose", "Revenue forecast")}</small><b>{visibleIntervals.length ? currency(revenue) : tx("Nog geen omzetprognose", "No revenue forecast yet")}</b></span>
-        <span><small>{tx("Dekking", "Coverage")}</small><b>{visibleIntervals.length ? `${coverageIntervals.reduce((sum,row)=>sum+row.plannedStaff,0)} / ${coverageIntervals.reduce((sum,row)=>sum+row.requiredStaff,0)}` : tx("Forecast ontbreekt", "Forecast missing")}</b></span>
+        <span><small>{tx("Dekking", "Coverage")}</small><b>{standardWeekReady ? `${coverage.reduce((sum,row)=>sum+row.planned,0)} / ${coverage.reduce((sum,row)=>sum+row.required,0)}` : visibleIntervals.length ? `${coverageIntervals.reduce((sum,row)=>sum+row.plannedStaff,0)} / ${coverageIntervals.reduce((sum,row)=>sum+row.requiredStaff,0)}` : tx("Forecast ontbreekt", "Forecast missing")}</b></span>
         <span><small>{tx("Geplande uren", "Planned hours")}</small><b>{visibleShifts.length ? `${Math.round(visibleShifts.reduce((sum,row)=>sum+Math.max(0,(new Date(row.ends_at).getTime()-new Date(row.starts_at).getTime())/60000-row.break_minutes),0)/6)/10} u` : tx("Nog geen diensten", "No shifts yet")}</b></span>
-        <span><small>{tx("Loonkosten", "Labor cost")}</small><b>{visibleShifts.length ? currency(labor) : tx("Nog niet berekend", "Not calculated yet")}</b></span>
-        <span><small>{tx("Loonpercentage", "Labor percentage")}</small><b>{visibleIntervals.length && visibleShifts.length ? percent : "—"}</b></span>
+        <span><small>{hasDjLane?tx("Loonkosten incl. DJ", "Labor cost incl. DJ"):tx("Loonkosten", "Labor cost")}</small><b>{weekShifts.length ? currency(labor) : tx("Nog niet berekend", "Not calculated yet")}</b></span>
+        <span><small>{tx("Loonpercentage", "Labor percentage")}</small><b>{visibleIntervals.length && weekShifts.length ? percent : "—"}</b></span>
+        </>}
         <button type="button" className={health.publishable && visibleShifts.length ? "summary-ok" : "summary-warn"} onClick={() => setPanel("health")}>{health.issues.length ? `${health.issues.length} ${health.issues.length===1?tx("aandachtspunt","issue"):tx("aandachtspunten", "issues")}` : visibleShifts.length ? tx("Rooster in orde", "Roster clear") : tx("Rooster nog niet klaar", "Roster not ready")}</button>
       </section>
       </>:null}
@@ -664,7 +715,7 @@ export function RosterBoard({
               <small>
                 {coverage[index].planned}/{coverage[index].required} {tx("bezet", "staffed")}
               </small>
-              {coverageIntervals.filter(interval=>interval.gap>0&&new Date(interval.startsAt).toDateString()===day.toDateString()).map(interval=><button type="button" className="interval-gap" key={interval.id} onClick={()=>{if(venueDepartments[0]){setNewShift({day:new Date(interval.startsAt),departmentId:venueDepartments[0].id,staffId:"open"});setPanel("new")}}}><span aria-hidden="true">!</span>{new Date(interval.startsAt).toLocaleTimeString(locale==="nl"?"nl-NL":"en-GB",{hour:"2-digit",minute:"2-digit"})} · {interval.gap} {tx("tekort","missing")}</button>)}
+              {activeLane==="dj"?null:coverageIntervals.filter(interval=>interval.gap>0&&new Date(interval.startsAt).toDateString()===day.toDateString()).map(interval=><button type="button" className="interval-gap" key={interval.id} onClick={()=>{if(venueDepartments[0]){setNewShift({day:new Date(interval.startsAt),departmentId:venueDepartments[0].id,staffId:"open"});setPanel("new")}}}><span aria-hidden="true">!</span>{new Date(interval.startsAt).toLocaleTimeString(locale==="nl"?"nl-NL":"en-GB",{hour:"2-digit",minute:"2-digit"})} · {interval.gap} {tx("tekort","missing")}</button>)}
             </div>
           ))}
         </div>
@@ -805,17 +856,30 @@ export function RosterBoard({
                 <span className="eyebrow">{tx("PUBLICATIECONTROLE", "PUBLICATION REVIEW")}</span>
                 <h3>{tx("Rooster publiceren", "Publish roster")}</h3>
                 <dl>
-                  <div><dt>{tx("Medewerkers met nieuwe of gewijzigde diensten", "Employees with new or changed shifts")}</dt><dd>{new Set(visibleShifts.filter(row=>row.status==="draft"&&row.staff_id).map(row=>row.staff_id)).size}</dd></div>
-                  <div><dt>{tx("Open diensten", "Open shifts")}</dt><dd>{visibleShifts.filter(row=>!row.staff_id).length}</dd></div>
+                  <div><dt>{tx("Medewerkers met nieuwe of gewijzigde diensten", "Employees with new or changed shifts")}</dt><dd>{new Set(weekShifts.filter(row=>row.status==="draft"&&row.staff_id).map(row=>row.staff_id)).size}</dd></div>
+                  <div><dt>{tx("Open diensten", "Open shifts")}</dt><dd>{weekShifts.filter(row=>!row.staff_id).length}</dd></div>
+                  {hasDjLane?<div><dt>{tx("Concept per planning","Drafts per lane")}</dt><dd>{laneDraftCount("staff")} {tx("personeel","staff")} · {laneDraftCount("dj")} DJ</dd></div>:null}
                   <div><dt>{tx("Waarschuwingen", "Warnings")}</dt><dd>{health.issues.filter(issue=>issue.severity!=="blocking").length}</dd></div>
-                  {visibleShifts.some(row=>!row.staff_id&&row.status==="draft")?<div><dt>{tx("Na publicatie", "After publishing")}</dt><dd>{tx("Open diensten worden vacatures. Open de dienst en kies ‘Aanbieden aan team’.", "Open shifts become vacancies. Open the shift and choose ‘Offer to team’.")}</dd></div>:null}
-                  <div><dt>{tx("Geplande uren", "Planned hours")}</dt><dd>{Math.round(visibleShifts.reduce((sum,row)=>sum+Math.max(0,(new Date(row.ends_at).getTime()-new Date(row.starts_at).getTime())/60000-row.break_minutes),0)/6)/10} u</dd></div>
+                  {weekShifts.some(row=>!row.staff_id&&row.status==="draft")?<div><dt>{tx("Na publicatie", "After publishing")}</dt><dd>{tx("Open diensten worden vacatures. Open de dienst en kies ‘Aanbieden aan team’.", "Open shifts become vacancies. Open the shift and choose ‘Offer to team’.")}</dd></div>:null}
+                  <div><dt>{tx("Geplande uren", "Planned hours")}</dt><dd>{Math.round(weekShifts.reduce((sum,row)=>sum+Math.max(0,(new Date(row.ends_at).getTime()-new Date(row.starts_at).getTime())/60000-row.break_minutes),0)/6)/10} u</dd></div>
                   <div><dt>{tx("Geplande loonkosten", "Planned labor cost")}</dt><dd>{currency(labor)}</dd></div>
                   <div><dt>{tx("Meldingen", "Notifications")}</dt><dd>{tx("Worden klaargezet; aflevering vereist providerbevestiging", "Will be queued; delivery requires provider confirmation")}</dd></div>
                 </dl>
                 {health.issues.some(issue=>issue.severity==="warning")?<ul className="publish-warnings">{health.issues.filter(issue=>issue.severity==="warning").map(issue=><li key={issue.code}><b>{issueLabel(issue.code)}</b> <span>{issue.count}</span></li>)}</ul>:null}
-                <button type="button" className="primary publish" disabled={busy} onClick={()=>void mutate("publish",{venueId,startsAt:weekStart.toISOString(),endsAt:weekEnd.toISOString(),expectedRevision:String(Math.max(...visibleShifts.filter(row=>row.status==="draft").map(row=>row.revision??1))),idempotencyKey:crypto.randomUUID()},()=>setPanel("share"))}>{tx("Controle bevestigd en publiceren", "Confirm review and publish")}</button>
+                <button type="button" className="primary publish" disabled={busy} onClick={()=>void mutate("publish",{venueId,startsAt:weekStart.toISOString(),endsAt:weekEnd.toISOString(),expectedRevision:String(Math.max(...weekShifts.filter(row=>row.status==="draft").map(row=>row.revision??1))),idempotencyKey:crypto.randomUUID()},()=>setPanel("share"))}>{tx("Controle bevestigd en publiceren", "Confirm review and publish")}</button>
               </section>
+            ) : panel === "nights" ? (
+              <ServiceNightsPanel
+                organisationId={organisationId}
+                venueId={venueId}
+                weekStart={weekStart}
+                roles={roles.filter((role) => allVenueDepartments.some((department) => department.id === role.department_id)).map((role) => ({ id: role.id, name: role.name, department_id: role.department_id, hourly_cost_minor: role.hourly_cost_minor, lane: laneOfRole(role.id) }))}
+                patterns={servicePatterns}
+                dayCounts={days.map((day) => ({ date: day, staff: staffShifts.filter((row) => new Date(row.starts_at).toDateString() === day.toDateString()).length, dj: weekShifts.filter((row) => laneOfDepartment(row.department_id) === "dj" && new Date(row.starts_at).toDateString() === day.toDateString()).length }))}
+                hasDjLane={hasDjLane}
+                locale={locale === "nl" ? "nl" : "en"}
+                onSaved={(text) => { setMessage(text); setPanel(null); router.refresh(); }}
+              />
             ) : panel === "templates" ? (
               <section className="context-detail"><span className="eyebrow">{tx("TEMPLATES","TEMPLATES")}</span><h3>{tx("Vaste weken hergebruiken","Reuse standard weeks")}</h3><p>{tx("Selecteer diensten in het rooster (Ctrl/Cmd + klik) om ze als template op te slaan, of pas een template toe op deze week.","Select shifts in the roster (Ctrl/Cmd + click) to save them as a template, or apply a template to this week.")}</p>
       <section className="planner-template-bar in-panel" aria-label={tx("Roostertemplates en herhaling","Roster templates and recurrence")}>
@@ -841,7 +905,7 @@ export function RosterBoard({
                 venues={venues
                   .filter((row) => row.id === venueId)
                   .map((row) => ({ id: row.id, label: row.name }))}
-                staff={activeStaff.map((row) => ({
+                staff={laneStaff.map((row) => ({
                   id: row.id,
                   label: `${row.full_name} · ${row.role_name}`,
                   phoneState: phoneState(row.contact_phone),
@@ -933,7 +997,9 @@ export function RosterBoard({
                 <TeamSetup
                   organisationId={organisationId}
                   venueId={venueId}
-                  departments={venueDepartments}
+                  plannerUserIds={plannerUserIds}
+                  canManageMembers={canManageMembers}
+                  departments={allVenueDepartments}
                   roles={roles}
                   staff={activeStaff}
                   busy={busy}
@@ -943,7 +1009,7 @@ export function RosterBoard({
                 <EmployeeCsvImport organisationId={organisationId} venueId={venueId} />
               </>
             ) : panel==="missed"?(
-              <MissedTimePanel venueId={venueId} staff={activeStaff} shifts={visibleShifts} busy={busy} save={(values)=>{values.clockedInAt=toUtc(values.clockedInAt);values.clockedOutAt=toUtc(values.clockedOutAt);void workforceMutate("record_missed_event",values);setPanel(null)}} tx={tx}/>
+              <MissedTimePanel venueId={venueId} staff={activeStaff} shifts={weekShifts} busy={busy} save={(values)=>{values.clockedInAt=toUtc(values.clockedInAt);values.clockedOutAt=toUtc(values.clockedOutAt);void workforceMutate("record_missed_event",values);setPanel(null)}} tx={tx}/>
             ) : (
               <AbsencePanel
                 venueId={venueId}
@@ -1245,7 +1311,10 @@ function ShiftEditor({
 }
 
 function TeamSetup({
+  organisationId,
   venueId,
+  plannerUserIds,
+  canManageMembers,
   departments,
   roles,
   staff,
@@ -1255,6 +1324,8 @@ function TeamSetup({
 }: {
   organisationId: string;
   venueId: string;
+  plannerUserIds: string[];
+  canManageMembers: boolean;
   departments: Department[];
   roles: Role[];
   staff: Staff[];
@@ -1263,6 +1334,20 @@ function TeamSetup({
   tx: (nl: string, en: string) => string;
 }) {
   const [invitation,setInvitation]=useState<{id:string;link:string;message:string;whatsappUrl:string;deliveryState:string;providerConnected:boolean}|null>(null);
+  const [staffDepartment,setStaffDepartment]=useState(departments[0]?.id??"");
+  const [plannerBusy,setPlannerBusy]=useState("");
+  const [plannerNote,setPlannerNote]=useState("");
+  const router=useRouter();
+  async function setPlanner(person:Staff,enabled:boolean){
+    setPlannerBusy(person.id);setPlannerNote("");
+    try{
+      const response=await fetch("/api/planning/nights",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({organisationId,action:"planner_access",values:{staffId:person.id,enabled:String(enabled)}})});
+      const result=await response.json() as {message?:string;errorCode?:string};
+      if(!response.ok)throw new Error(result.errorCode==="STAFF_HAS_NO_ACCOUNT"?tx(`${person.full_name} heeft nog geen account. Laat de uitnodiging eerst accepteren.`,`${person.full_name} has no account yet. Have them accept the invitation first.`):result.errorCode==="FORBIDDEN"?tx("Alleen eigenaar of beheerder kan planners aanwijzen.","Only an owner or administrator can assign planners."):tx("Plannerrecht kon niet worden aangepast.","Planner access could not be changed."));
+      setPlannerNote(enabled?tx(`${person.full_name} kan nu plannen, beschikbaarheid opvragen en publiceren.`,`${person.full_name} can now plan, request availability and publish.`):tx(`${person.full_name} is geen planner meer.`,`${person.full_name} is no longer a planner.`));
+      router.refresh();
+    }catch(error){setPlannerNote(error instanceof Error?error.message:tx("Mislukt.","Failed."))}finally{setPlannerBusy("")}
+  }
   return (
     <div>
       <h3>{tx("Team instellen", "Set up team")}</h3>
@@ -1351,8 +1436,8 @@ function TeamSetup({
             {tx("Telefoon", "Phone")}
             <input name="phone" type="tel" />
           </label>
-          <label>{tx("Team / afdeling","Team / department")}<select name="departmentId">{departments.map(department=><option key={department.id} value={department.id}>{department.name}</option>)}</select></label>
-          <label>{tx("Planningsrol","Planning role")}<select name="roleId">{roles.map(role=><option key={role.id} value={role.id}>{role.name}</option>)}</select></label>
+          <label>{tx("Team / afdeling","Team / department")}<select name="departmentId" value={staffDepartment} onChange={event=>setStaffDepartment(event.target.value)}>{departments.map(department=><option key={department.id} value={department.id}>{department.name}</option>)}</select></label>
+          <label>{tx("Planningsrol","Planning role")}<select name="roleId" key={staffDepartment}>{roles.filter(role=>role.department_id===staffDepartment).map(role=><option key={role.id} value={role.id}>{role.name}</option>)}</select></label>
           <label>{tx("Toegang","Access role")}<input value={tx("Medewerker","Employee")} disabled/></label>
           <label>
             {tx("Contract", "Contract")}
@@ -1390,9 +1475,11 @@ function TeamSetup({
             >
               {tx("Deactiveer", "Deactivate")}
             </button>
+            {canManageMembers?(person.auth_user_id?<button type="button" className={plannerUserIds.includes(person.auth_user_id)?"planner-on":""} aria-pressed={plannerUserIds.includes(person.auth_user_id)} disabled={plannerBusy===person.id} onClick={()=>void setPlanner(person,!plannerUserIds.includes(person.auth_user_id!))}>{plannerUserIds.includes(person.auth_user_id)?tx("Planner ✓","Planner ✓"):tx("Maak planner","Make planner")}</button>:<small className="planner-hint">{tx("Planner na accountactivatie","Planner after account activation")}</small>):null}
           </div>
         ))}
       </div>
+      {canManageMembers?<p className="quiet planner-explainer">{plannerNote||tx("Een planner kan diensten maken en toewijzen, beschikbaarheid opvragen, avonden openen en publiceren. Geen toegang tot financiën of afsluitingen.","A planner can create and assign shifts, request availability, open nights and publish. No access to finance or closes.")}</p>:null}
     </div>
   );
 }
