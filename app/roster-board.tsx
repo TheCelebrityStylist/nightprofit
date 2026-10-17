@@ -176,6 +176,8 @@ export function RosterBoard({
     null,
   );
   const [tab, setTab] = useState<"roster" | "actions" | "insights" | "hours">("roster");
+  const [mobileDay, setMobileDay] = useState<number | null>(null);
+  const [nowMs] = useState(() => Date.now());
   const [newShift, setNewShift] = useState<{
     day: Date;
     departmentId: string;
@@ -399,6 +401,7 @@ export function RosterBoard({
   });
 
   const draftCount = visibleShifts.filter((row) => row.status === "draft").length;
+  const blockingCount = health.issues.filter((issue) => issue.severity === "blocking").length;
   const publishedCount = visibleShifts.filter((row) => row.status === "published").length;
   const teamReady = venueDepartments.length > 0 && roles.length > 0 && activeStaff.length > 0;
   const weekState: "setup" | "empty" | "draft" | "published" = !teamReady ? "setup" : draftCount ? "draft" : publishedCount ? "published" : "empty";
@@ -416,8 +419,20 @@ export function RosterBoard({
   const shiftMinutes = (row: Shift) => Math.max(0, Math.floor((new Date(row.ends_at).getTime() - new Date(row.starts_at).getTime()) / 60000) - row.break_minutes);
   const dayTotals = days.map((day) => {
     const rows = visibleShifts.filter((row) => new Date(row.starts_at).toDateString() === day.toDateString());
-    return { minutes: rows.reduce((sum, row) => sum + shiftMinutes(row), 0), cost: rows.reduce((sum, row) => sum + (BigInt(row.hourly_cost_minor) * BigInt(shiftMinutes(row)) + 30n) / 60n, 0n), open: rows.filter((row) => !row.staff_id).length };
+    return { minutes: rows.reduce((sum, row) => sum + shiftMinutes(row), 0), cost: rows.reduce((sum, row) => sum + (BigInt(row.hourly_cost_minor) * BigInt(shiftMinutes(row)) + 30n) / 60n, 0n), open: rows.filter((row) => !row.staff_id).length, count: rows.length };
   });
+  const staffInDepartment = (person: Staff, departmentId: string) => {
+    if (person.id === "open") return true;
+    const knownRole = roles.some((role) => role.name === person.role_name);
+    return !knownRole || roles.some((role) => role.department_id === departmentId && role.name === person.role_name) || visibleShifts.some((row) => row.staff_id === person.id && row.department_id === departmentId);
+  };
+  const quietDays = days.map((day, index) => dayTotals[index].minutes === 0 && !dayTotals[index].open && !visibleIntervals.some((row) => new Date(row.starts_at).toDateString() === day.toDateString()));
+  const collapseQuiet = quietDays.some((quiet) => !quiet);
+  const gridStyle = { gridTemplateColumns: `190px ${quietDays.map((quiet) => (collapseQuiet && quiet ? "64px" : "minmax(130px,1fr)")).join(" ")}`, minWidth: `${190 + quietDays.reduce((sum, quiet) => sum + (collapseQuiet && quiet ? 64 : 130), 0)}px` };
+  const firstBusyDay = dayTotals.findIndex((total) => total.count > 0);
+  const todayIndex = days.findIndex((day) => day.toDateString() === new Date(nowMs).toDateString());
+  const mobileIndex = mobileDay ?? (todayIndex >= 0 && dayTotals[todayIndex].count ? todayIndex : firstBusyDay >= 0 ? firstBusyDay : Math.max(todayIndex, 0));
+  const mobileShifts = visibleShifts.filter((shift) => new Date(shift.starts_at).toDateString() === days[mobileIndex].toDateString()).sort((a, b) => a.starts_at.localeCompare(b.starts_at));
   const venueName = venues.find((row) => row.id === venueId)?.name ?? "";
   const zonedTime = (value: string, options: Intl.DateTimeFormatOptions) => new Date(value).toLocaleString(locale === "nl" ? "nl-NL" : "en-GB", { timeZone: venueTimezone, ...options });
   const shareRows = activeStaff.map((person) => {
@@ -445,7 +460,9 @@ export function RosterBoard({
           :weekState==="empty"?(previousWeekCount?<button type="button" className="primary" disabled={busy} onClick={() => void mutate("copy_week", {venueId,startsAt:new Date(weekStart.getTime()-7*dayMs).toISOString(),endsAt:weekStart.toISOString(),idempotencyKey:crypto.randomUUID()})}>{tx(`Kopieer vorige week (${previousWeekCount})`,`Copy last week (${previousWeekCount})`)}</button>
             :visibleIntervals.length?<button type="button" className="primary" disabled={busy} onClick={()=>void mutate("proposal",{venueId,startsAt:weekStart.toISOString(),endsAt:weekEnd.toISOString()})}>{tx("Rooster voorstellen","Suggest roster")}</button>
             :<button type="button" className="primary" onClick={()=>{if(venueDepartments[0]){setNewShift({day:weekStart,departmentId:venueDepartments[0].id,staffId:"open"});setPanel("new")}}}>{tx("Eerste dienst toevoegen","Add first shift")}</button>)
-          :weekState==="draft"?<button type="button" className="primary publish" disabled={busy || !health.publishable} title={!health.publishable?tx("Los eerst de blokkerende punten op (tab Inzicht).","Resolve blocking issues first (Insights tab)."):undefined} onClick={() => setPanel("publish")}>{tx(`Publiceren · ${draftCount} ${draftCount===1?"wijziging":"wijzigingen"}`,`Publish · ${draftCount} ${draftCount===1?"change":"changes"}`)}</button>
+          :weekState==="draft"?(health.publishable
+            ?<button type="button" className="primary publish" disabled={busy} onClick={() => setPanel("publish")}>{tx(`Publiceren · ${draftCount} ${draftCount===1?"wijziging":"wijzigingen"}`,`Publish · ${draftCount} ${draftCount===1?"change":"changes"}`)}</button>
+            :<button type="button" className="primary blocked" onClick={() => setPanel("health")}>{tx(`${blockingCount} ${blockingCount===1?"blokkade":"blokkades"} vóór publiceren`,`${blockingCount} ${blockingCount===1?"blocker":"blockers"} before publishing`)}</button>)
           :<button type="button" className="primary" onClick={()=>setPanel("share")}>{tx("Delen via WhatsApp","Share via WhatsApp")}</button>}
         </div>
       </header>
@@ -522,7 +539,7 @@ export function RosterBoard({
         <span><small>{tx("Geplande uren", "Planned hours")}</small><b>{visibleShifts.length ? `${Math.round(visibleShifts.reduce((sum,row)=>sum+Math.max(0,(new Date(row.ends_at).getTime()-new Date(row.starts_at).getTime())/60000-row.break_minutes),0)/6)/10} u` : tx("Nog geen diensten", "No shifts yet")}</b></span>
         <span><small>{tx("Loonkosten", "Labor cost")}</small><b>{visibleShifts.length ? currency(labor) : tx("Nog niet berekend", "Not calculated yet")}</b></span>
         <span><small>{tx("Loonpercentage", "Labor percentage")}</small><b>{visibleIntervals.length && visibleShifts.length ? percent : "—"}</b></span>
-        <button type="button" className={health.publishable && visibleShifts.length ? "summary-ok" : "summary-warn"} onClick={() => setPanel("health")}>{health.issues.length ? `${health.issues.length} ${tx("aandachtspunten", "issues")}` : visibleShifts.length ? tx("Rooster in orde", "Roster clear") : tx("Rooster nog niet klaar", "Roster not ready")}</button>
+        <button type="button" className={health.publishable && visibleShifts.length ? "summary-ok" : "summary-warn"} onClick={() => setPanel("health")}>{health.issues.length ? `${health.issues.length} ${health.issues.length===1?tx("aandachtspunt","issue"):tx("aandachtspunten", "issues")}` : visibleShifts.length ? tx("Rooster in orde", "Roster clear") : tx("Rooster nog niet klaar", "Roster not ready")}</button>
       </section>
       </>:null}
       {tab==="actions"?<section className="workforce-inbox" aria-label={tx("Beslissingen voor manager","Manager decision inbox")}><header><div><span className="eyebrow">{tx("ACTIE NODIG","ACTION NEEDED")}</span><h3>{tx("Belangrijkste eerst","Most important first")}</h3></div><b>{venueExceptions.length}</b></header>{venueExceptions.length?venueExceptions.map(item=>{const shift=item.shift_id?shifts.find(row=>row.id===item.shift_id):undefined;const correction=item.exception_type==="time_correction"?timeCorrections.find(row=>row.id===item.source_id):undefined;const record=item.exception_type==="submitted_hours"?timeRecords.find(row=>row.id===item.source_id):undefined;const swap=item.exception_type==="swap_decision"?swaps.find(row=>row.id===item.source_id):undefined;return <article key={item.action_key} data-severity={item.severity}><div><strong>{exceptionLabel(item.exception_type)}</strong><span>{new Date(item.relevant_at).toLocaleString(locale==="nl"?"nl-NL":"en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})} · {item.severity}</span><small>{item.why_it_matters}</small><small>{item.recommended_action}</small><details><summary>{tx("Bewijs en oplosvoorwaarde","Evidence and resolution condition")}</summary><p>{item.resolution_condition}</p><code>{item.action_key} · {String(item.evidence.shift_revision??item.evidence.input_hash??item.evidence.time_record_id??item.source_id)}</code></details></div>{item.exception_type==="swap_decision"&&swap?<><button type="button" className="primary" disabled={busy||swap.state!=="candidate_accepted"} onClick={()=>void mutate("swap_decide",{venueId,swapId:swap.id,decision:"approved",reason:tx("Goedgekeurd na hercontrole van dekking en regels","Approved after coverage and rule revalidation")})}>{tx("Goedkeuren + opvolgversie","Approve + successor version")}</button><button type="button" disabled={busy} onClick={()=>void mutate("swap_decide",{venueId,swapId:swap.id,decision:"rejected",reason:tx("Afgewezen na managercontrole","Rejected after manager review")})}>{tx("Afwijzen","Reject")}</button></>:item.exception_type==="time_correction"&&correction?<button type="button" className="primary" disabled={busy} onClick={()=>void workforceMutate("decide_correction",{correctionId:correction.id,decision:"approved",reason:tx("Goedgekeurd na vergelijking met klokbewijs","Approved after comparing clock evidence")})}>{tx("Correctie goedkeuren","Approve correction")}</button>:item.exception_type==="submitted_hours"&&record?<button type="button" className="primary" disabled={busy} onClick={()=>void workforceMutate("approve_time",{timeRecordId:record.id,correctionReason:""})}>{tx("Uren goedkeuren","Approve hours")}</button>:shift?<button type="button" className="primary" onClick={()=>{setSelected(shift);setPanel("shift")}}>{tx("Open betrokken dienst","Open affected shift")}</button>:item.exception_type==="coverage_gap"?<button type="button" className="primary" onClick={()=>{if(venueDepartments[0]){setNewShift({day:new Date(item.relevant_at),departmentId:venueDepartments[0].id,staffId:"open"});setPanel("new")}}}>{tx("Los interval op","Resolve interval")}</button>:item.exception_type==="stale_proposal"?<button type="button" className="primary" disabled={busy} onClick={()=>void mutate("proposal",{venueId,startsAt:weekStart.toISOString(),endsAt:weekEnd.toISOString()})}>{tx("Voorstellen vernieuwen","Regenerate proposals")}</button>:null}</article>}):<p className="quiet">{tx("Niets te doen. Ziekmeldingen, ruilverzoeken en uren om goed te keuren verschijnen hier.","Nothing to do. Sick reports, swap requests and hours to approve appear here.")}</p>}</section>:null}
@@ -623,9 +640,9 @@ export function RosterBoard({
         </button>
       ) : null}
       <section className="mobile-day-roster" aria-label={tx("Mobiel dagrooster", "Mobile day roster")}>
-        <header><button type="button" aria-label={tx("Vorige dag", "Previous day")} onClick={()=>setWeekStart(new Date(weekStart.getTime()-dayMs))}>←</button><b>{weekStart.toLocaleDateString(locale==="nl"?"nl-NL":"en-GB",{weekday:"long",day:"numeric",month:"short"})}</b><button type="button" aria-label={tx("Volgende dag", "Next day")} onClick={()=>setWeekStart(new Date(weekStart.getTime()+dayMs))}>→</button></header>
-        <div className="mobile-coverage"><span>{tx("Dekking", "Coverage")}</span><b>{coverage[0]?.planned ?? 0} / {coverage[0]?.required ?? 0}</b></div>
-        {visibleShifts.filter(shift=>new Date(shift.starts_at).toDateString()===weekStart.toDateString()).length ? visibleShifts.filter(shift=>new Date(shift.starts_at).toDateString()===weekStart.toDateString()).map(shift=><button type="button" className="mobile-shift-card" key={shift.id} onClick={()=>{setSelected(shift);setPanel("shift")}}><span><b>{staff.find(person=>person.id===shift.staff_id)?.full_name??tx("Open dienst","Open shift")}</b><small>{roles.find(role=>role.id===shift.role_id)?.name??tx("Dienst","Shift")}</small></span><strong>{new Date(shift.starts_at).toLocaleTimeString(locale==="nl"?"nl-NL":"en-GB",{hour:"2-digit",minute:"2-digit"})}–{new Date(shift.ends_at).toLocaleTimeString(locale==="nl"?"nl-NL":"en-GB",{hour:"2-digit",minute:"2-digit"})}</strong></button>) : <div className="mobile-empty"><b>{tx("Nog geen diensten", "No shifts yet")}</b><span>{tx("Voeg een dienst toe of maak een roostervoorstel.", "Add a shift or build a roster proposal.")}</span></div>}
+        <div className="mobile-day-chips" role="tablist">{days.map((day,index)=><button type="button" role="tab" aria-selected={index===mobileIndex} className={index===mobileIndex?"active":""} key={day.toISOString()} onClick={()=>setMobileDay(index)}><small>{day.toLocaleDateString(locale==="nl"?"nl-NL":"en-GB",{weekday:"short"})}</small><b>{day.getDate()}</b><em>{dayTotals[index].count||""}</em></button>)}</div>
+        <div className="mobile-coverage"><span>{days[mobileIndex].toLocaleDateString(locale==="nl"?"nl-NL":"en-GB",{weekday:"long",day:"numeric",month:"short"})}</span><b>{coverage[mobileIndex]?.planned ?? 0} / {coverage[mobileIndex]?.required ?? 0} {tx("bezet","filled")}</b></div>
+        {mobileShifts.length ? mobileShifts.map(shift=><button type="button" className="mobile-shift-card" key={shift.id} onClick={()=>{setSelected(shift);setPanel("shift")}}><span><b>{staff.find(person=>person.id===shift.staff_id)?.full_name??tx("Open dienst","Open shift")}</b><small>{roles.find(role=>role.id===shift.role_id)?.name??tx("Dienst","Shift")}{shift.status==="draft"?tx(" · concept"," · draft"):""}</small></span><strong>{new Date(shift.starts_at).toLocaleTimeString(locale==="nl"?"nl-NL":"en-GB",{hour:"2-digit",minute:"2-digit"})}–{new Date(shift.ends_at).toLocaleTimeString(locale==="nl"?"nl-NL":"en-GB",{hour:"2-digit",minute:"2-digit"})}</strong></button>) : <div className="mobile-empty"><b>{tx("Geen diensten op deze dag", "No shifts this day")}</b><span>{tx("Kies een andere dag of voeg een dienst toe.", "Pick another day or add a shift.")}</span></div>}
       </section>
       {view==="day"?<section className="day-planner" aria-label={tx("Dagrooster op servicetijdlijn","Day roster on service timeline")}><header><div><span className="eyebrow">{tx("DAGWEERGAVE","DAY VIEW")}</span><h3>{weekStart.toLocaleDateString(locale==="nl"?"nl-NL":"en-GB",{weekday:"long",day:"numeric",month:"long"})}</h3></div><small>{tx("Service-uren · vraag, pauzes en bezetting","Service hours · demand, breaks and staffing")}</small></header><div className="service-timeline">{Array.from({length:16},(_,index)=>index+12).map(hour=><div className="timeline-hour" key={hour}><b>{String(hour%24).padStart(2,"0")}:00</b><div>{visibleIntervals.filter(interval=>new Date(interval.starts_at).getHours()===hour%24).map(interval=><span className="demand-marker" key={interval.id}>{tx("nodig","required")} {interval.required_staff}</span>)}{visibleShifts.filter(shift=>new Date(shift.starts_at).toDateString()===weekStart.toDateString()&&new Date(shift.starts_at).getHours()===hour%24).map(shift=><button type="button" key={shift.id} className="timeline-shift" onClick={()=>{setSelected(shift);setPanel("shift")}}><b>{staff.find(person=>person.id===shift.staff_id)?.full_name??tx("Open dienst","Open shift")}</b><span>{new Date(shift.starts_at).toLocaleTimeString(locale==="nl"?"nl-NL":"en-GB",{hour:"2-digit",minute:"2-digit"})}–{new Date(shift.ends_at).toLocaleTimeString(locale==="nl"?"nl-NL":"en-GB",{hour:"2-digit",minute:"2-digit"})}</span>{visibleBreakPlans.some(plan=>plan.shift_id===shift.id)?<small>{tx("Pauze gepland","Break planned")}</small>:null}</button>)}</div></div>)}</div></section>:null}
       {view==="month"?<section className="month-planner" aria-label={tx("Beknopt maandrooster","Concise monthly roster")}><header><div><span className="eyebrow">{tx("MAANDWEERGAVE","MONTH VIEW")}</span><h3>{weekStart.toLocaleDateString(locale==="nl"?"nl-NL":"en-GB",{month:"long",year:"numeric"})}</h3></div></header><div className="month-grid">{Array.from({length:35},(_,index)=>{const first=new Date(weekStart.getFullYear(),weekStart.getMonth(),1);const gridStart=monday(first);const day=new Date(gridStart.getTime()+index*dayMs);const rows=shifts.filter(shift=>shift.venue_id===venueId&&shift.status!=="cancelled"&&new Date(shift.starts_at).toDateString()===day.toDateString());const requirement=intervals.filter(interval=>interval.venue_id===venueId&&new Date(interval.starts_at).toDateString()===day.toDateString()).reduce((max,row)=>Math.max(max,row.required_staff),0);return <button type="button" className={day.getMonth()===weekStart.getMonth()?"":"outside"} key={day.toISOString()} onClick={()=>{setWeekStart(day);setView("day")}}><b>{day.getDate()}</b><span>{rows.length} {tx("diensten","shifts")}</span>{requirement?<small>{tx("piek nodig","peak required")} {requirement}</small>:<small>{tx("geen vraagbewijs","no demand evidence")}</small>}</button>})}</div></section>:null}
@@ -633,12 +650,12 @@ export function RosterBoard({
         className="roster-board"
         aria-label={tx("Visueel weekrooster", "Visual weekly roster")}
       >
-        <div className="roster-grid roster-head">
+        <div className="roster-grid roster-head" style={gridStyle}>
           <div className="employee-heading">{tx("Medewerker", "Employee")}</div>
           {days.map((day, index) => (
             <div
               key={day.toISOString()}
-              className={coverage[index].planned < coverage[index].required ? "coverage-gap" : ""}
+              className={`${coverage[index].planned < coverage[index].required ? "coverage-gap" : ""} ${collapseQuiet && quietDays[index] ? "quiet" : ""}`}
             >
               <b>
                 {day.toLocaleDateString(locale === "nl" ? "nl-NL" : "en-GB", { weekday: "short" })}
@@ -655,7 +672,7 @@ export function RosterBoard({
           <div className="department-group" key={department.id}>
             <h3>{department.name}</h3>
             {[
-              ...displayedStaff,
+              ...displayedStaff.filter((person) => staffInDepartment(person, department.id)),
               {
                 id: "open",
                 full_name: tx("Open diensten", "Open shifts"),
@@ -663,7 +680,7 @@ export function RosterBoard({
                 onboarding_status: "cleared",
               },
             ].map((person) => (
-              <div className="roster-grid roster-row" key={`${department.id}-${person.id}`}>
+              <div className="roster-grid roster-row" style={gridStyle} key={`${department.id}-${person.id}`}>
                 <div className="employee-cell">
                   <span className="avatar">
                     {person.id === "open" ? "+" : person.full_name.slice(0, 2).toUpperCase()}
@@ -690,9 +707,10 @@ export function RosterBoard({
                         new Date(row.starts_at) < new Date(day.getTime() + dayMs) &&
                         new Date(row.ends_at) > day,
                     );
+                  const quietIndex = days.findIndex((value) => value.getTime() === day.getTime());
                   return (
                     <div
-                      className={`shift-cell ${dayAbsence ? "unavailable" : ""} ${person.id !== "open" && !dayAbsence ? `avail-${availabilityOn(person.id, day) ?? "unknown"}` : ""}`}
+                      className={`shift-cell ${collapseQuiet && quietDays[quietIndex] ? "quiet" : ""} ${dayAbsence ? "unavailable" : ""} ${person.id !== "open" && !dayAbsence ? `avail-${availabilityOn(person.id, day) ?? "unknown"}` : ""}`}
                       key={day.toISOString()}
                       onDragOver={(event) => event.preventDefault()}
                       onDrop={(event) => drop(event, day)}
@@ -762,9 +780,9 @@ export function RosterBoard({
             ))}
           </div>
         ))}
-        <div className="roster-grid roster-foot">
+        <div className="roster-grid roster-foot" style={gridStyle}>
           <div className="employee-cell"><b>{tx("Totaal", "Total")}</b><small className="avail-legend"><i className="avail-available" />{tx("kan", "available")} <i className="avail-unavailable" />{tx("kan niet", "unavailable")} <i className="avail-unknown" />{tx("onbekend", "unknown")}</small></div>
-          {dayTotals.map((total, index) => <div key={days[index].toISOString()}><b>{Math.round(total.minutes / 6) / 10} {tx("uur", "h")}</b><small>{currency(total.cost)}{total.open ? ` · ${total.open} ${tx("open", "open")}` : ""}</small></div>)}
+          {dayTotals.map((total, index) => <div className={collapseQuiet && quietDays[index] ? "quiet" : ""} key={days[index].toISOString()}><b>{Math.round(total.minutes / 6) / 10} {tx("uur", "h")}</b><small>{currency(total.cost)}{total.open ? ` · ${total.open} ${tx("open", "open")}` : ""}</small></div>)}
         </div>
       </section>:null}
       </>:null}
@@ -813,7 +831,7 @@ export function RosterBoard({
                 {shareRows.length?<ul>{shareRows.map(({person,rows,text,phone,minutes})=><li key={person.id}><div><b>{person.full_name}</b><small>{rows.length} {rows.length===1?tx("dienst","shift"):tx("diensten","shifts")} · {Math.round(minutes/6)/10} {tx("uur","h")}</small></div><div className="share-actions">{phone?<a className="primary" href={`https://wa.me/${phone}?text=${encodeURIComponent(text)}`} target="_blank" rel="noreferrer">WhatsApp</a>:<small>{tx("Geen geldig 06-nummer","No valid mobile number")}</small>}<button type="button" onClick={()=>{void navigator.clipboard.writeText(text);setMessage(tx(`Bericht voor ${person.full_name} gekopieerd.`,`Message for ${person.full_name} copied.`))}}>{tx("Kopieer","Copy")}</button></div></li>)}</ul>:<p className="quiet">{tx("Nog geen gepubliceerde diensten deze week.","No published shifts this week yet.")}</p>}
               </section>
             ) : panel === "health" ? (
-              <section className="context-detail"><span className="eyebrow">{tx("ROOSTERSTATUS", "ROSTER STATUS")}</span><h3>{health.issues.length ? tx("Aandacht nodig", "Needs attention") : tx("Rooster in orde", "Roster clear")}</h3>{health.issues.length?<ul>{health.issues.map(issue=><li key={issue.code}><b>{({coverage:tx("Dekking","Coverage"),compliance:tx("Regels","Rules"),availability:tx("Beschikbaarheid","Availability"),skills:tx("Rollen en vaardigheden","Roles and skills"),budget:tx("Budget","Budget"),hours:tx("Uren","Hours"),preference:tx("Voorkeuren","Preferences"),breaks:tx("Pauzes","Breaks"),evidence:tx("Ontbrekende informatie","Missing information")}[issue.dimension]??issue.dimension)}</b><span>{issue.count} · {issue.severity=== "blocking"?tx("blokkeert publicatie","blocks publication"):tx("controleren","review")}</span></li>)}</ul>:<p>{tx("Er zijn geen bekende blokkades voor deze week.","There are no known blockers for this week.")}</p>}</section>
+              <section className="context-detail"><span className="eyebrow">{tx("ROOSTERSTATUS", "ROSTER STATUS")}</span><h3>{health.issues.length ? tx("Aandacht nodig", "Needs attention") : tx("Rooster in orde", "Roster clear")}</h3>{health.issues.length?<ul>{health.issues.map(issue=><li key={issue.code}><b>{({coverage:tx("Dekking","Coverage"),compliance:tx("Regels","Rules"),availability:tx("Beschikbaarheid","Availability"),skills:tx("Rollen en vaardigheden","Roles and skills"),budget:tx("Budget","Budget"),hours:tx("Uren","Hours"),preference:tx("Voorkeuren","Preferences"),breaks:tx("Pauzes","Breaks"),evidence:tx("Ontbrekende informatie","Missing information")}[issue.dimension]??issue.dimension)}</b><span>{issue.count} · {issue.severity=== "blocking"?tx("blokkeert publicatie","blocks publication"):tx("controleren","review")}</span><small>{issueLabel(issue.code)}</small></li>)}</ul>:<p>{tx("Er zijn geen bekende blokkades voor deze week.","There are no known blockers for this week.")}</p>}</section>
             ) : panel === "scenario" ? (
               <section className="context-detail"><span className="eyebrow">{tx("SCENARIO TESTEN", "TEST SCENARIO")}</span><h3>{tx("Wat verandert er bij andere drukte?", "What changes with different demand?")}</h3><div className="scenario-buttons">{[-2000,-1000,0,1000,2000].map(value=><button type="button" className={scenarioBasisPoints===value?"active":""} key={value} onClick={()=>{setScenarioBasisPoints(value);if(value)void mutate("scenario",{venueId,startsAt:weekStart.toISOString(),endsAt:weekEnd.toISOString(),demandChangeBasisPoints:String(value),idempotencyKey:crypto.randomUUID()})}}>{value===0?tx("Basis","Baseline"):`${value>0?"+":""}${value/100}%`}</button>)}</div><dl><div><dt>{tx("Benodigde medewerkers","Required staff")}</dt><dd>{(scenario??coverageIntervals).reduce((sum,row)=>sum+row.requiredStaff,0)}</dd></div><div><dt>{tx("Dekkingsgaten","Coverage gaps")}</dt><dd>{(scenario??coverageIntervals).reduce((sum,row)=>sum+row.gap,0)}</dd></div><div><dt>{tx("Geplande loonkosten","Planned labor cost")}</dt><dd>{visibleShifts.length?currency(labor):"—"}</dd></div></dl></section>
             ) : panel === "availability" ? (
