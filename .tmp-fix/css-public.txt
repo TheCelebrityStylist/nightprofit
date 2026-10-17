@@ -1,0 +1,2 @@
+.public-auth{display:flex;align-items:center;gap:10px}.public-login{display:inline-flex;align-items:center;min-height:44px;padding:0 18px;border-radius:10px;background:var(--lime);color:#10130e;font-weight:800;text-decoration:none}.public-hero a.primary{display:inline-flex;align-items:center;text-decoration:none}
+@media(max-width:700px){.public header nav{display:none}.public-auth .ghost{display:none}}
