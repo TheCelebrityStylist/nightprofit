@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { OperatingDemo } from "./operating-demo";
 
 type Locale = "nl" | "en";
@@ -140,9 +141,9 @@ function DataPage({ page }: { page: Page }) {
 
 function PublicPage({ onDemo }: { onDemo: () => void }) {
   return <div className="public">
-    <header><div className="brand"><span className="logo">N</span><b>NightProfit</b></div><nav><a href="#modules">Product</a><a href="#security">Security</a><a href="#pricing">Prijzen</a></nav><button className="ghost" onClick={onDemo}>Bekijk demo</button></header>
+    <header><div className="brand"><span className="logo">N</span><b>NightProfit</b></div><nav><a href="#modules">Product</a><a href="#security">Security</a><a href="#pricing">Prijzen</a></nav><div className="public-auth"><Link className="public-login" href="/login">Inloggen</Link><button className="ghost" onClick={onDemo}>Bekijk demo</button></div></header>
     <main>
-      <section className="public-hero"><div className="eyebrow">FINANCIËLE CONTROLE VOOR NACHTZAKEN</div><h1>Zie waar je winst verdwijnt.<br/><em>Vóór je volgende opening.</em></h1><p>Je POS toont wat je verkocht. NightProfit reconcilieert de nacht, meet elke eventbijdrage en maakt elke marge-afwijking bewijsbaar.</p><div><button className="primary" onClick={onDemo}>Start winstdiagnose →</button><button className="ghost" onClick={onDemo}>Interactieve demo</button></div></section>
+      <section className="public-hero"><div className="eyebrow">FINANCIËLE CONTROLE VOOR NACHTZAKEN</div><h1>Zie waar je winst verdwijnt.<br/><em>Vóór je volgende opening.</em></h1><p>Je POS toont wat je verkocht. NightProfit reconcilieert de nacht, meet elke eventbijdrage en maakt elke marge-afwijking bewijsbaar.</p><div><Link className="primary" href="/login">Inloggen →</Link><button className="ghost" onClick={onDemo}>Interactieve demo</button></div></section>
       <section className="proof"><span>GEEN GOKWERK</span><span>EXACTE GELDBEREKENING</span><span>BEWIJS BIJ ELKE WAARDE</span><span>NL + EN</span></section>
       <section id="modules" className="module-grid">{[
         ["01","Sluit elke nacht exact","POS, terminals, kas, tickets en huisrekeningen in één controleerbare snapshot."],

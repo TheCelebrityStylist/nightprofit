@@ -21,6 +21,7 @@ import { PosMappingWorkspace } from "./pos-mapping-workspace";
 import { InventoryCountWorkspace } from "./inventory-count-workspace";
 import { ReconciliationWorkspace } from "./reconciliation-workspace";
 import { RosterBoard } from "./roster-board";
+import { MyRoster } from "./my-roster";
 import { ServiceAutopilot } from "./service-autopilot";
 import "./real-app.css";
 
@@ -111,7 +112,7 @@ export async function AuthenticatedApp({ path }: { path: string }) {
 }
 
 async function AuthenticatedAppContent({
-  path,
+  path: requestedPath,
   locale,
 }: {
   path: string;
@@ -160,8 +161,19 @@ async function AuthenticatedAppContent({
   if (!organisation) return <OnboardingForm />;
   const venues = (venuesData ?? []) as Venue[];
   const closes = (closesData ?? []) as Close[];
+  const [{data:canPlanData},{data:ownProfile}]=await Promise.all([
+    supabase.rpc("has_capability",{target_organisation_id:organisationId,target_venue_id:null as unknown as string,required_capability:"planning.manage"}),
+    supabase.from("staff_profiles").select("id").eq("organisation_id",organisationId).eq("auth_user_id",user.id).maybeSingle(),
+  ]);
+  const canPlan=Boolean(canPlanData);
+  const fullAccess=["owner","administrator","manager","venue_manager","finance","bookkeeper"].includes(String(membership.role));
+  const teamOnly=!fullAccess;
+  const navItems:readonly (readonly [AuthMessageKey,string])[]=teamOnly
+    ?[["nav.myRoster","/app/my-work"],...(canPlan?[["nav.planning","/app/planning"] as const]:[])]
+    :[...navigation,...(ownProfile?[["nav.myRoster","/app/my-work"] as const]:[])];
+  const path=teamOnly&&requestedPath!=="/app/my-work"&&!(canPlan&&requestedPath==="/app/planning")?"/app/my-work":requestedPath;
   const activeKey =
-    navigation.find(([, href]) => path === href)?.[0] ??
+    navItems.find(([, href]) => path === href)?.[0] ??
     (path.startsWith("/app/close/") ? "nav.nightlyClose" : "nav.command");
   const activeLabel = t(activeKey);
 
@@ -227,7 +239,7 @@ async function AuthenticatedAppContent({
           </div>
         </div>
         <nav aria-label="NightProfit">
-          {navigation.map(([key, href]) => (
+          {navItems.map(([key, href]) => (
             <Link
               key={href}
               href={href}
@@ -259,7 +271,7 @@ async function AuthenticatedAppContent({
           </div>
         </header>
         <div className="content">
-          {path !== "/app/planning" && <section className="hero-row">
+          {path !== "/app/planning" && path !== "/app/my-work" && <section className="hero-row">
             <div>
               <div className="eyebrow">{t("shell.live")}</div>
               <h1>{activeLabel}</h1>
@@ -920,6 +932,19 @@ async function dashboard(
   );
 }
 
+/** Loads every row of a query in 1000-row pages (the API caps a single response). */
+async function fetchAllRows<T>(page:(from:number,to:number)=>PromiseLike<{data:T[]|null;error:unknown}>,maximum=25000){
+  const rows:T[]=[];
+  for(let from=0;from<maximum;from+=1000){
+    const {data,error}=await page(from,from+999);
+    if(error)throw error;
+    rows.push(...(data??[]));
+    if(!data||data.length<1000)break;
+  }
+  return {data:rows};
+}
+const planningWindow=()=>({from:new Date(Date.now()-183*86400000).toISOString(),to:new Date(Date.now()+400*86400000).toISOString()});
+
 async function planning(
   supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
   organisationId: string,
@@ -967,24 +992,27 @@ async function planning(
       .select("id,full_name,role_name,onboarding_status,contact_email,contact_phone,preferred_language,employment_status,invitation_state,effective_hourly_cost_minor,contracted_minutes_week,minimum_minutes_week,maximum_minutes_week,preferences,auth_user_id")
       .eq("organisation_id", organisationId)
       .order("full_name"),
-    supabase
+    fetchAllRows((from,to)=>supabase
       .from("current_demand_forecast_intervals" as "demand_forecast_intervals")
       .select(
         "id,venue_id,starts_at,ends_at,expected_guests,expected_revenue_minor,required_staff",
       )
       .eq("organisation_id", organisationId)
-      .order("starts_at", { ascending: false })
-      .limit(30),
-    supabase
+      .gte("starts_at", planningWindow().from)
+      .lt("starts_at", planningWindow().to)
+      .order("starts_at")
+      .range(from,to)),
+    fetchAllRows((from,to)=>supabase
       .from("shifts")
       .select(
         "id,venue_id,department_id,role_id,staff_id,starts_at,ends_at,break_minutes,hourly_cost_minor,status,revision,locked",
       )
       .eq("organisation_id", organisationId)
-      .gte("starts_at", new Date(Date.now() - 42 * 86400000).toISOString())
-      .lt("starts_at", new Date(Date.now() + 120 * 86400000).toISOString())
+      .gte("starts_at", planningWindow().from)
+      .lt("starts_at", planningWindow().to)
       .order("starts_at", { ascending: true })
-      .limit(3000),
+      .order("id")
+      .range(from,to)),
     supabase
       .from("roster_proposals")
       .select("id,venue_id,objective,status,result_summary,created_at")
@@ -1004,18 +1032,23 @@ async function planning(
       .eq("organisation_id", organisationId)
       .order("created_at", { ascending: false })
       .limit(200),
-    supabase
+    fetchAllRows((from,to)=>supabase
       .from("staff_absences")
       .select("id,venue_id,staff_id,starts_at,ends_at,absence_type,status,note")
       .eq("organisation_id", organisationId)
-      .order("starts_at", { ascending: false })
-      .limit(200),
-    supabase
+      .gte("ends_at", planningWindow().from)
+      .order("starts_at")
+      .order("id")
+      .range(from,to)),
+    fetchAllRows((from,to)=>supabase
       .from("staff_availability")
       .select("staff_id,venue_id,starts_at,ends_at,availability,submitted_at,source")
       .eq("organisation_id", organisationId)
-      .order("starts_at", { ascending: false })
-      .limit(500),
+      .gte("starts_at", planningWindow().from)
+      .lt("starts_at", planningWindow().to)
+      .order("starts_at")
+      .order("id")
+      .range(from,to)),
     supabase
       .from("staff_role_qualifications")
       .select("staff_id,role_id,qualified_until")
@@ -1647,22 +1680,20 @@ async function myWork(
   const eligibleOffers=(eligibleOfferData??[]) as unknown as {offer_id:string;venue_id:string;shift_id:string;starts_at:string;ends_at:string;break_minutes:number;role_name:string;closes_at:string}[];
   const openRecord = records.find((record) => !record.clocked_out_at);
   const next = shifts[0];
+  const rosterMonday=new Date();rosterMonday.setHours(0,0,0,0);rosterMonday.setDate(rosterMonday.getDate()-((rosterMonday.getDay()+6)%7));
+  const rosterEnd=new Date(rosterMonday.getTime()+35*86400000);
+  const myVenue=venues[0];
+  const [{data:myRosterData},{data:myAvailabilityData},{data:myPatternData}]=await Promise.all([
+    supabase.rpc("get_my_roster" as "clock_out",{target_organisation_id:organisationId,target_from:rosterMonday.toISOString(),target_to:rosterEnd.toISOString()} as never),
+    supabase.from("staff_availability").select("starts_at,availability").eq("organisation_id",organisationId).eq("staff_id",staff.id).gte("starts_at",new Date(rosterMonday.getTime()-86400000).toISOString()).lt("starts_at",rosterEnd.toISOString()).order("starts_at").order("created_at"),
+    supabase.from("venue_service_patterns" as "departments").select("venue_id,iso_weekday,active").eq("organisation_id",organisationId),
+  ]);
+  const myRoster=(myRosterData??{shifts:[]}) as unknown as {shifts:{id:string;venue_id:string;starts_at:string;ends_at:string;break_minutes:number;status:string;role_name:string;department_kind:string;colleagues:{name:string;role_name:string;starts_at:string;ends_at:string}[]}[]};
+  const openWeekdays=((myPatternData??[]) as unknown as {venue_id:string;iso_weekday:number;active:boolean}[]).filter(row=>row.active&&(!myVenue||row.venue_id===myVenue.id)).map(row=>row.iso_weekday);
   return (
     <div className="workflow-stack employee-work">
-      <section className="morning-brief">
-        <div>
-          <div className="eyebrow">{t("myWork.eyebrow")} · {staff.full_name}</div>
-          <h2>
-            {next
-              ? `${t("myWork.nextShift")} ${new Date(next.starts_at).toLocaleString(authIntlLocale(locale), { weekday: "long", hour: "2-digit", minute: "2-digit" })}`
-              : t("myWork.noNextShift")}
-          </h2>
-          <p>{t("myWork.privateHelp")}</p>
-        </div>
-        <span className="status">
-          {openRecord ? t("myWork.clockedIn") : t("myWork.notClockedIn")}
-        </span>
-      </section>
+      {myVenue?<MyRoster organisationId={organisationId} venueId={myVenue.id} venueName={myVenue.name} timezone={myVenue.timezone||"Europe/Amsterdam"} firstName={staff.full_name.trim().split(/\s+/)[0]} shifts={myRoster.shifts??[]} availability={(myAvailabilityData??[]) as unknown as {starts_at:string;availability:string}[]} openWeekdays={openWeekdays} locale={locale==="nl"?"nl":"en"}/>:null}
+      {openRecord?<p className="my-clock-state">{t("myWork.clockedIn")}</p>:null}
       {openRecord ? (
         <div className="workflow-stack"><WorkflowForm
           endpoint="/api/workforce"

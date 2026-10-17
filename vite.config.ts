@@ -12,6 +12,13 @@ const base44SandboxHosts =
     ? [`.${process.env.BASE44_SANDBOX_HOST_DOMAIN}`]
     : [];
 
+// The preview sandbox serves the app on an internal host; the browser posts from the
+// public preview domain. Only this app's id is trusted (see lib/http/security.ts).
+const base44PreviewAppId =
+  process.env.BASE44_PREVIEW_MODE === "1"
+    ? (process.env.BASE44_PUBLIC_HOST_SUFFIX ?? "").split("--")[0].replace(/[^a-f0-9]/gi, "")
+    : "";
+
 const localBindingConfig = {
   main: "./worker/index.ts",
   compatibility_flags: ["nodejs_compat"],
@@ -28,6 +35,7 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    define: { __BASE44_PREVIEW_APP_ID__: JSON.stringify(base44PreviewAppId) },
     server: {
       host: "0.0.0.0",
       allowedHosts: ["terminal.local", ...base44SandboxHosts],
