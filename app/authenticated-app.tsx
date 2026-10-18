@@ -24,7 +24,7 @@ import { RosterBoard } from "./roster-board";
 import { MyRoster } from "./my-roster";
 import { Planner } from "./planner";
 import "./planner.css";
-import { whatsappStatus } from "../lib/whatsapp/cloud";
+import { whatsappReady } from "../lib/whatsapp/store";
 import { ServiceAutopilot } from "./service-autopilot";
 import "./real-app.css";
 
@@ -248,8 +248,11 @@ async function AuthenticatedAppContent({
           ))}
         </nav>
         <div className="aside-foot">
-          <span>{t("shell.secureData")}</span>
           <p>{authEnumLabel(locale, membership.role)}</p>
+          <AuthLocaleSwitch />
+          <form action="/api/auth/logout" method="post">
+            <button className="aside-logout">{t("shell.logout")}</button>
+          </form>
         </div>
       </aside>
       <main className="app-main">
@@ -990,7 +993,7 @@ async function plannerPage(
       patterns={(patternData ?? []) as unknown as { venue_id: string; iso_weekday: number; active: boolean; lines: { role_id: string; count: number; start: string; end: string; break_minutes: number }[] }[]}
       plannerUserIds={((plannerData ?? []) as unknown as { user_id: string }[]).map((row) => row.user_id)}
       canManageMembers={Boolean(canManageMembers)}
-      whatsappReady={whatsappStatus().configured}
+      whatsappReady={await whatsappReady(organisationId)}
     />
   );
 }
@@ -1252,7 +1255,7 @@ async function planning(
       servicePatterns={servicePatterns}
       plannerUserIds={plannerUserIds}
       canManageMembers={Boolean(canManageMembers)}
-      whatsappReady={whatsappStatus().configured}
+      whatsappReady={await whatsappReady(organisationId)}
     />
   );
   /* The legacy form workspace remains below temporarily as a recovery reference,

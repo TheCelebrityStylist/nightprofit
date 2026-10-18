@@ -4,7 +4,8 @@ import {requireMembership} from "../../../../lib/auth/require-membership";
 import {assertSameOrigin,securityErrorResponse} from "../../../../lib/http/security";
 import {createSupabaseAdminClient} from "../../../../lib/supabase/admin";
 import {normalizeDutchPhone} from "../../../../lib/workforce/domain";
-import {sendTemplate,whatsappConfig} from "../../../../lib/whatsapp/cloud";
+import {sendTemplate} from "../../../../lib/whatsapp/cloud";
+import {loadWhatsapp} from "../../../../lib/whatsapp/store";
 
 const schema=z.discriminatedUnion("action",[
   z.object({action:z.literal("roster"),organisationId:z.string().uuid(),venueId:z.string().uuid(),weekStart:z.iso.datetime({offset:true}),staffIds:z.array(z.string().uuid()).max(250).optional(),resend:z.boolean().default(false)}),
@@ -24,7 +25,7 @@ export async function POST(request:Request){
   try{
     assertSameOrigin(request);
     const input=schema.parse(await request.json());
-    const config=whatsappConfig();
+    const config=await loadWhatsapp(input.organisationId);
     if(!config)return NextResponse.json({errorCode:"WHATSAPP_NOT_CONFIGURED"},{status:409});
     const capability=input.action==="invite"?"members.manage":"planning.manage";
     const {supabase}=await requireMembership(input.organisationId,capability,input.venueId);

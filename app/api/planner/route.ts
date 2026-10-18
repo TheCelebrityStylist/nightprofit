@@ -5,7 +5,8 @@ import {assertSameOrigin,securityErrorResponse} from "../../../lib/http/security
 import {createSupabaseAdminClient} from "../../../lib/supabase/admin";
 import {normalizeDutchPhone} from "../../../lib/workforce/domain";
 import {createStaffOnboardingToken,hashStaffOnboardingToken,onboardingMessage} from "../../../lib/workforce/onboarding";
-import {sendTemplate,whatsappConfig} from "../../../lib/whatsapp/cloud";
+import {sendTemplate} from "../../../lib/whatsapp/cloud";
+import {loadWhatsapp} from "../../../lib/whatsapp/store";
 import {addDays,firstName,zonedInstant} from "../../../lib/planning/nights";
 
 const base={organisationId:z.string().uuid(),venueId:z.string().uuid()};
@@ -73,7 +74,7 @@ export async function POST(request:Request){
     const message=onboardingMessage(language,firstName(staff.full_name),venueName,link);
     let phone:string|null=null;try{phone=staff.contact_phone?normalizeDutchPhone(staff.contact_phone):null}catch{phone=null}
     const whatsappUrl=phone?`https://wa.me/${phone.slice(1)}?text=${encodeURIComponent(message)}`:"";
-    const config=whatsappConfig();
+    const config=await loadWhatsapp(input.organisationId);
     if(!config||!phone)return NextResponse.json({link,message,whatsappUrl,delivery:{state:"manual",detail:phone?"":"Geen telefoonnummer."}});
     const result=await sendTemplate(config,phone,"invite",[firstName(staff.full_name),venueName,link]);
     try{await createSupabaseAdminClient().from("notification_outbox").insert({organisation_id:input.organisationId,venue_id:input.venueId,channel:"whatsapp",destination_e164:phone,correlation_type:"staff_invitation",correlation_id:staff.id,payload:{template:config.templates.invite},state:result.ok?"sent":"failed",provider_message_id:result.ok?result.messageId:null,failure_reason:result.ok?null:result.detail})}catch{/* delivery result is still returned */}

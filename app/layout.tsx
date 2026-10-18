@@ -9,10 +9,9 @@ const cliniqDisplay = MuseoModerno({ variable: "--font-cliniq-display", subsets:
 const cliniqSerif = Instrument_Serif({ variable: "--font-cliniq-serif", subsets: ["latin"], weight: "400", style: "italic" });
 
 export const metadata: Metadata = {
-  title: { default: "Cliniq · Rooster", template: "%s · Cliniq" },
-  description: "Evidence-backed financial control for bars, clubs and event venues.",
-  openGraph: { title: "NightProfit", description: "Zie waar je winst verdwijnt. Vóór je volgende opening.", images: ["/og.png"] },
-  twitter: { card: "summary_large_image", title: "NightProfit", description: "Evidence-backed profit control.", images: ["/og.png"] },
+  title: { default: "Cliniq Team", template: "%s · Cliniq Team" },
+  description: "Rooster, beschikbaarheid en diensten voor het team van Cliniq.",
+  robots: { index: false, follow: false },
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

@@ -5,7 +5,8 @@ import {createAvailabilityToken,hashAvailabilityToken} from "../../../lib/workfo
 import {normalizeDutchPhone} from "../../../lib/workforce/domain";
 import {assertSameOrigin,securityErrorResponse} from "../../../lib/http/security";
 import {createSupabaseAdminClient} from "../../../lib/supabase/admin";
-import {sendTemplate,whatsappConfig} from "../../../lib/whatsapp/cloud";
+import {sendTemplate} from "../../../lib/whatsapp/cloud";
+import {loadWhatsapp} from "../../../lib/whatsapp/store";
 import {addDays,deadlineLabel,firstName,nightsLabel,zonedInstant} from "../../../lib/planning/nights";
 
 const schema=z.object({
@@ -70,7 +71,7 @@ export async function POST(request:Request){
     if(command.replayed)return NextResponse.json({message:"Dit beschikbaarheidsverzoek was al voorbereid.",requestId:command.request_id,replayed:true,links:{},shares:{},recipientIdsByStaff:{}});
     const {data:createdRecipients,error:createdRecipientsError}=await supabase.from("availability_request_recipients").select("id,staff_id").eq("organisation_id",input.organisationId).eq("request_id",command.request_id);if(createdRecipientsError)throw createdRecipientsError;
     const recipientIdsByStaff=Object.fromEntries((createdRecipients??[]).map(row=>[row.staff_id,row.id]));
-    const config=input.deliver==="whatsapp"?whatsappConfig():null;
+    const config=input.deliver==="whatsapp"?await loadWhatsapp(input.organisationId):null;
     if(input.deliver==="whatsapp"&&!config)return NextResponse.json({message:"Links voorbereid. WhatsApp is nog niet gekoppeld, deel ze handmatig.",requestId:command.request_id,links:Object.fromEntries(links),shares,recipientIdsByStaff,deliveries:{}},{status:201});
     const deliveries:Record<string,{state:"sent"|"failed";detail:string}>={};
     if(config){

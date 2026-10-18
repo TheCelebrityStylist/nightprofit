@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { AddPersonPanel } from "./add-person";
 import { ServiceNightsPanel } from "./service-nights";
+import { WhatsappSetup } from "./whatsapp-setup";
 import { addDays, deadlineLabel, firstName, isoWeekNumber, mondayOf, nightOf, nightsLabel, zonedInstant } from "../lib/planning/nights";
 
 type Lane = "staff" | "dj";
@@ -28,7 +29,8 @@ type Sheet =
   | { kind: "team" }
   | { kind: "person" }
   | { kind: "nights" }
-  | { kind: "open"; date: string };
+  | { kind: "open"; date: string }
+  | { kind: "whatsapp" };
 
 type Toast = { text: string; tone?: "bad"; undo?: () => void };
 
@@ -401,6 +403,7 @@ export function Planner({
             <span>{dateShort(night)}</span>
             {slots.length ? <b className={slots.every((slot) => slot.staff_id) ? "full" : ""}>{slots.filter((slot) => slot.staff_id).length}/{slots.length}</b> : null}
           </div>
+          {slots.length ? <span className="pl-progress" aria-hidden><i style={{ width: `${Math.round((slots.filter((slot) => slot.staff_id).length / slots.length) * 100)}%` }} /></span> : null}
           {laneTeam.length && currentRequest ? (
             <p className="pl-night-answers" aria-label="Beschikbaarheid">
               <span className="a-yes">{counts.can} kan</span>
@@ -414,7 +417,7 @@ export function Planner({
           <p className="pl-night-empty">Nog geen plekken voor {lane === "dj" ? "DJ's" : "personeel"}.</p>
         ) : groups.map((group) => (
           <div className="pl-group" key={group.key}>
-            <h3>{time(group.first.starts_at)} – {time(group.first.ends_at)}{multipleRoles ? <small>{roleById.get(group.first.role_id)?.name}</small> : null}</h3>
+            <h3><span>{time(group.first.starts_at)} – {time(group.first.ends_at)}{multipleRoles ? ` · ${roleById.get(group.first.role_id)?.name ?? ""}` : ""}</span><small>{group.rows.filter((slot) => slot.staff_id).length}/{group.rows.length}</small></h3>
             <ul>
               {group.rows.map((slot) => {
                 const person = slot.staff_id ? personById.get(slot.staff_id) : undefined;
@@ -444,7 +447,7 @@ export function Planner({
   }
 
   return (
-    <div className="pl">
+    <div className={`pl${published.length ? " has-published" : ""}`}>
       <header className="pl-head">
         <div className="pl-hello">
           <h1>Hoi {plannerName || "daar"}</h1>
@@ -453,6 +456,7 @@ export function Planner({
         <div className="pl-head-actions">
           <button type="button" className="pl-btn pl-btn--quiet" onClick={() => setSheet({ kind: "team" })}>Team <span className="pl-count">{team.length}</span></button>
           <button type="button" className="pl-btn pl-btn--quiet" onClick={() => setSheet({ kind: "nights" })}>Avonden</button>
+          {canManageMembers ? <button type="button" className="pl-btn pl-btn--quiet" onClick={() => setSheet({ kind: "whatsapp" })}>WhatsApp<i className={`pl-dot${whatsappReady ? " is-on" : ""}`} aria-label={whatsappReady ? "gekoppeld" : "niet gekoppeld"} /></button> : null}
         </div>
       </header>
 
@@ -468,6 +472,8 @@ export function Planner({
         <div className="pl-modes" role="tablist" aria-label="Weergave">
           {(["day", "week", "month"] as const).map((value) => <button key={value} type="button" role="tab" aria-selected={mode === value} className={mode === value ? "on" : ""} onClick={() => { if (value === "day" && mode === "week") setFocus(shownNight ?? focus); setMode(value); }}>{value === "day" ? "Dag" : value === "week" ? "Week" : "Maand"}</button>)}
         </div>
+      </div>
+      <div className="pl-tabs">
         {hasDj ? (
           <div className="pl-lanes" role="tablist" aria-label="Planning">
             {(["staff", "dj"] as Lane[]).map((which) => {
@@ -482,7 +488,7 @@ export function Planner({
             <button type="button" role="tab" aria-selected={view === "people"} className={view === "people" ? "on" : ""} onClick={() => setView("people")}>Per persoon</button>
           </div>
         ) : null}
-      </div>
+            </div>
 
       {mode !== "month" ? (
         <ol className={`pl-steps${nowIndex >= 0 ? " has-now" : ""}`}>
@@ -725,6 +731,8 @@ export function Planner({
               <label className="pl-date-input">Of kies een datum<input type="date" min={today} value={sheet.date} onChange={(event) => event.target.value && setSheet({ kind: "open", date: event.target.value })} /></label>
               {dayHasPlan(sheet.date) ? <p className="pl-note">{capital(dayLong(sheet.date))} {dateShort(sheet.date)} staat al open.</p> : openNightChoices(sheet.date)}
             </div>
+          ) : sheet.kind === "whatsapp" ? (
+            <WhatsappSetup organisationId={organisationId} venueId={venue.id} onChanged={() => router.refresh()} />
           ) : sheet.kind === "nights" ? (
             <ServiceNightsPanel
               organisationId={organisationId}
@@ -759,6 +767,7 @@ export function Planner({
     if (value.kind === "team") return "Team";
     if (value.kind === "person") return "Persoon toevoegen";
     if (value.kind === "open") return "Avond openen";
+    if (value.kind === "whatsapp") return "WhatsApp koppelen";
     return "Avonden";
   }
 }
