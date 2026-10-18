@@ -58,6 +58,7 @@ function LocalizedAuthForm({ mode,initialError }: { mode:"login"|"signup"|"forgo
       {errorCode&&<div className="form-message error" role="alert" aria-live="assertive">{t(authErrorMessageKey(mode,errorCode))}</div>}
       {message&&<div className="form-message" role="status" aria-live="polite">{message}</div>}
     </form>
+    {mode==="login"?<p className="invite-only-note">{t("auth.inviteOnly")}</p>:null}
     <footer>{mode==="login"?<><Link href="/forgot-password">{t("auth.forgot")}</Link></>:<><Link href="/login">{t("auth.back")}</Link>{mode==="update"&&errorCode?<Link href="/forgot-password">{t("auth.requestNewLink")}</Link>:null}</>}</footer>
   </section></main>;
 }

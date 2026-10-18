@@ -1,8 +1,27 @@
 "use client";
 import {useState} from "react";
-import {useRouter} from "next/navigation";
 
-export function EmployeeOnboardingForm({token,language}:{token:string;language:"nl"|"en"}){
-  const tx=(nl:string,en:string)=>language==="nl"?nl:en,router=useRouter();const [busy,setBusy]=useState(false),[error,setError]=useState("");
-  return <><span className="eyebrow">NIGHTPROFIT · {tx("VEILIGE ONBOARDING","SECURE ONBOARDING")}</span><h1>{tx("Activeer je medewerkersaccount","Activate your employee account")}</h1><p>{tx("Vul alleen de resterende account- en contractgegevens in. Je manager beheert rollen en kwalificaties.","Complete only the remaining account and contract details. Your manager controls roles and qualifications.")}</p><form onSubmit={async event=>{event.preventDefault();setBusy(true);setError("");const values=Object.fromEntries(new FormData(event.currentTarget));const response=await fetch("/api/workforce/onboarding",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({token,...values})});setBusy(false);if(!response.ok){setError(tx("Activeren is mislukt. Controleer de gegevens of vraag een nieuwe link.","Activation failed. Check the details or request a new link."));return}router.push("/login?activated=1")}}><label>{tx("E-mail","Email")}<input name="email" type="email" autoComplete="email" required/></label><label>{tx("Wachtwoord (minimaal 12 tekens)","Password (at least 12 characters)")}<input name="password" type="password" autoComplete="new-password" minLength={12} required/></label><label>{tx("Contracturen per week","Contracted hours per week")}<input name="contractedHours" type="number" min="0" max="168" defaultValue="24" required/></label><label>{tx("Minimumuren per week","Minimum hours per week")}<input name="minimumHours" type="number" min="0" max="168" defaultValue="0" required/></label><label>{tx("Maximumuren per week","Maximum hours per week")}<input name="maximumHours" type="number" min="0" max="168" defaultValue="40" required/></label>{error?<p className="form-error" role="alert">{error}</p>:null}<button className="primary" disabled={busy}>{busy?tx("Activeren…","Activating…"):tx("Account activeren","Activate account")}</button></form></>
+export function EmployeeOnboardingForm({token,name,venue,language}:{token:string;name:string;venue:string;language:"nl"|"en"}){
+  const tx=(nl:string,en:string)=>language==="nl"?nl:en;
+  const [busy,setBusy]=useState(false),[error,setError]=useState("");
+  return <>
+    <span className="eyebrow">{tx("WELKOM BIJ HET TEAM","WELCOME TO THE TEAM")}</span>
+    <h1>{name?tx(`Hoi ${name}!`,`Hi ${name}!`):tx("Hoi!","Hi!")}</h1>
+    <p>{tx(`Je staat in het team van ${venue}. Maak je account aan, dan zie je je diensten en geef je door wanneer je kunt.`,`You're on the ${venue} team. Create your account to see your shifts and tell us when you can work.`)}</p>
+    <form onSubmit={async event=>{
+      event.preventDefault();setBusy(true);setError("");
+      const values=Object.fromEntries(new FormData(event.currentTarget)) as Record<string,string>;
+      if(values.password!==values.confirm){setBusy(false);setError(tx("De wachtwoorden zijn niet hetzelfde.","The passwords don't match."));return}
+      const response=await fetch("/api/workforce/onboarding",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({token,email:values.email,password:values.password})}).catch(()=>null);
+      const result=response?await response.json().catch(()=>({})) as {next?:string;errorCode?:string}:{errorCode:"NETWORK"};
+      if(!response?.ok){setBusy(false);setError(result.errorCode==="EMAIL_IN_USE"?tx("Dit e-mailadres heeft al een account. Log in of gebruik een ander adres.","This email already has an account. Log in or use another address."):result.errorCode==="INVITATION_UNAVAILABLE"?tx("Deze link werkt niet meer. Vraag je planner om een nieuwe.","This link no longer works. Ask your planner for a new one."):tx("Dat lukte niet. Check je gegevens en probeer het opnieuw.","That didn't work. Check your details and try again."));return}
+      window.location.assign(result.next||"/app/my-work");
+    }}>
+      <label>{tx("E-mailadres","Email")}<input name="email" type="email" autoComplete="email" required/></label>
+      <label>{tx("Kies een wachtwoord","Choose a password")} <small>{tx("minimaal 10 tekens","at least 10 characters")}</small><input name="password" type="password" autoComplete="new-password" minLength={10} required/></label>
+      <label>{tx("Herhaal wachtwoord","Repeat password")}<input name="confirm" type="password" autoComplete="new-password" minLength={10} required/></label>
+      {error?<p className="form-message error" role="alert">{error}</p>:null}
+      <button className="primary" disabled={busy}>{busy?tx("Even geduld…","One moment…"):tx("Account aanmaken","Create account")}</button>
+    </form>
+  </>;
 }

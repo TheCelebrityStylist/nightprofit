@@ -6,10 +6,12 @@ import {normalizeDutchPhone} from "../../../lib/workforce/domain";
 import {assertSameOrigin,securityErrorResponse} from "../../../lib/http/security";
 import {createSupabaseAdminClient} from "../../../lib/supabase/admin";
 import {sendTemplate,whatsappConfig} from "../../../lib/whatsapp/cloud";
+import {addDays,deadlineLabel,firstName,nightsLabel,zonedInstant} from "../../../lib/planning/nights";
 
 const schema=z.object({
   organisationId:z.string().uuid(),venueId:z.string().uuid(),
-  startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),deadlineAt:z.iso.datetime({local:true}),
+  startsAt:z.iso.datetime({local:true}).optional(),endsAt:z.iso.datetime({local:true}).optional(),deadlineAt:z.iso.datetime({local:true,offset:true}),
+  dates:z.array(z.iso.date()).min(1).max(31).optional(),
   staffIds:z.array(z.string().uuid()).min(1).max(250),idempotencyKey:z.string().uuid(),
   deliver:z.enum(["manual","whatsapp"]).default("manual"),
 });
@@ -21,14 +23,9 @@ const updateSchema=z.object({
   deadlineAt:z.iso.datetime({local:true}).optional(),idempotencyKey:z.string().uuid(),
 });
 
-const availabilityMessage=(language:string,name:string,startsAt:string,endsAt:string,deadlineAt:string,url:string)=>{
-  const locale=language==="en"?"en-GB":"nl-NL";
-  const range=`${new Date(startsAt).toLocaleDateString(locale,{day:"numeric",month:"short"})}–${new Date(endsAt).toLocaleDateString(locale,{day:"numeric",month:"short"})}`;
-  const deadline=new Date(deadlineAt).toLocaleString(locale,{weekday:"short",hour:"2-digit",minute:"2-digit"});
-  return language==="en"
-    ?`Hi ${name}! Can you share your availability for ${range} by ${deadline}? Your personal secure link takes less than a minute: ${url}`
-    :`Hoi ${name}! Kun je je beschikbaarheid voor ${range} uiterlijk ${deadline} doorgeven? Via deze persoonlijke beveiligde link duurt dat minder dan een minuut: ${url}`;
-};
+const availabilityMessage=(language:string,name:string,nights:string,deadline:string,url:string)=>language==="en"
+  ?`Hi ${name}! Can you work ${nights}? Let us know before ${deadline}, it takes ten seconds: ${url}`
+  :`Hoi ${name}! Kun je ${nights}? Laat het weten vóór ${deadline}, kost je tien seconden: ${url}`;
 
 export async function POST(request:Request){
   try{
@@ -36,6 +33,13 @@ export async function POST(request:Request){
     const input=schema.parse(await request.json());
     const {supabase}=await requireMembership(input.organisationId,"workforce.manage",input.venueId);
     const origin=new URL(request.url).origin;
+    if(!input.dates&&(!input.startsAt||!input.endsAt))throw new Error("DATES_REQUIRED");
+    const {data:venueRow}=await supabase.from("venues").select("timezone").eq("organisation_id",input.organisationId).eq("id",input.venueId).single();
+    const timezone=String((venueRow as {timezone?:string}|null)?.timezone||"Europe/Amsterdam");
+    const dates=input.dates?[...new Set(input.dates)].sort():null;
+    const periodStart=dates?zonedInstant(dates[0],"18:00",timezone):new Date(input.startsAt!).toISOString();
+    const periodEnd=dates?zonedInstant(addDays(dates.at(-1)!,1),"05:00",timezone):new Date(input.endsAt!).toISOString();
+    const nightsText=(language:string)=>dates?nightsLabel(dates,language==="en"?"en":"nl"):`${new Date(periodStart).toLocaleDateString("nl-NL",{day:"numeric",month:"short",timeZone:timezone})} t/m ${new Date(periodEnd).toLocaleDateString("nl-NL",{day:"numeric",month:"short",timeZone:timezone})}`;
     const {data:staff,error:staffError}=await supabase.from("staff_profiles").select("id,full_name,preferred_language,contact_phone,onboarding_status").eq("organisation_id",input.organisationId).in("id",input.staffIds);
     if(staffError||staff?.length!==input.staffIds.length)throw new Error("RECIPIENTS_INVALID");
     const links=new Map<string,string>();
@@ -47,15 +51,20 @@ export async function POST(request:Request){
       links.set(person.id,responseUrl);
       let phone:string|null=null,phoneState:"valid"|"missing"|"invalid"=person.contact_phone?"invalid":"missing";
       if(person.contact_phone){try{phone=normalizeDutchPhone(person.contact_phone);phoneState="valid"}catch{/* explicitly reported below */}}
-      const message=availabilityMessage(person.preferred_language,person.full_name,input.startsAt,input.endsAt,input.deadlineAt,responseUrl);
+      const message=availabilityMessage(person.preferred_language,firstName(person.full_name),nightsText(person.preferred_language),deadlineLabel(new Date(input.deadlineAt).toISOString(),timezone,person.preferred_language==="en"?"en":"nl"),responseUrl);
       shares[person.id]={message,phoneState,whatsappUrl:phone?`https://wa.me/${phone.slice(1)}?text=${encodeURIComponent(message)}`:null};
       return {staff_id:person.id,token_hash:hashAvailabilityToken(token),response_url:responseUrl,language:person.preferred_language,phone_state:phoneState,destination_e164:phone};
     });
-    const {data,error}=await supabase.rpc("create_availability_request_v3" as "create_availability_request",{
-      target_organisation_id:input.organisationId,target_venue_id:input.venueId,
-      target_starts_at:new Date(input.startsAt).toISOString(),target_ends_at:new Date(input.endsAt).toISOString(),
-      target_deadline_at:new Date(input.deadlineAt).toISOString(),recipient_inputs:recipients,target_idempotency_key:input.idempotencyKey,
-    } as never);
+    const {data,error}=dates
+      ?await supabase.rpc("create_availability_request_v4" as "create_availability_request",{
+        target_organisation_id:input.organisationId,target_venue_id:input.venueId,target_dates:dates,
+        target_deadline_at:new Date(input.deadlineAt).toISOString(),recipient_inputs:recipients,target_idempotency_key:input.idempotencyKey,
+      } as never)
+      :await supabase.rpc("create_availability_request_v3" as "create_availability_request",{
+        target_organisation_id:input.organisationId,target_venue_id:input.venueId,
+        target_starts_at:periodStart,target_ends_at:periodEnd,
+        target_deadline_at:new Date(input.deadlineAt).toISOString(),recipient_inputs:recipients,target_idempotency_key:input.idempotencyKey,
+      } as never);
     if(error)throw error;
     const command=data as unknown as {request_id:string;replayed:boolean};
     if(command.replayed)return NextResponse.json({message:"Dit beschikbaarheidsverzoek was al voorbereid.",requestId:command.request_id,replayed:true,links:{},shares:{},recipientIdsByStaff:{}});
@@ -67,14 +76,13 @@ export async function POST(request:Request){
     if(config){
       const admin=(()=>{try{return createSupabaseAdminClient()}catch{return null}})();
       const people=staff as unknown as {id:string;full_name:string;preferred_language:string;contact_phone:string|null}[];
-      const range=`${new Date(input.startsAt).toLocaleDateString("nl-NL",{day:"numeric",month:"short",timeZone:"Europe/Amsterdam"})} t/m ${new Date(input.endsAt).toLocaleDateString("nl-NL",{day:"numeric",month:"short",timeZone:"Europe/Amsterdam"})}`;
-      const deadline=new Date(input.deadlineAt).toLocaleString("nl-NL",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit",timeZone:"Europe/Amsterdam"});
+      const deadline=deadlineLabel(new Date(input.deadlineAt).toISOString(),timezone);
       for(const recipient of recipients){
         const person=people.find(row=>row.id===recipient.staff_id);
         const url=links.get(recipient.staff_id);
         if(!person||!url)continue;
         if(!recipient.destination_e164){deliveries[recipient.staff_id]={state:"failed",detail:recipient.phone_state==="missing"?"Geen telefoonnummer.":"Telefoonnummer is ongeldig."};continue;}
-        const result=await sendTemplate(config,recipient.destination_e164,"availability",[person.full_name.trim().split(/\s+/)[0],range,deadline,url]);
+        const result=await sendTemplate(config,recipient.destination_e164,"availability",[firstName(person.full_name),nightsText(person.preferred_language),deadline,url]);
         deliveries[recipient.staff_id]={state:result.ok?"sent":"failed",detail:result.ok?"Verstuurd via WhatsApp.":result.detail};
         if(admin&&recipientIdsByStaff[recipient.staff_id])await admin.from("notification_outbox").insert({organisation_id:input.organisationId,venue_id:input.venueId,channel:"whatsapp",destination_e164:recipient.destination_e164,correlation_type:"availability_recipient",correlation_id:recipientIdsByStaff[recipient.staff_id],payload:{template:config.templates.availability,request_id:command.request_id},state:result.ok?"sent":"failed",provider_message_id:result.ok?result.messageId:null,failure_reason:result.ok?null:result.detail});
       }

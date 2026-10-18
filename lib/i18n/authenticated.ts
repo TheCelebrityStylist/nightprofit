@@ -3,7 +3,7 @@ export const authenticatedMessages = {
     "language.label": "Taal",
     "language.nl": "Nederlands",
     "language.en": "English",
-    "auth.secureLogin": "VEILIG INLOGGEN",
+    "auth.secureLogin": "CLINIQ TEAM",
     "auth.start": "START JE WINSTDIAGNOSE",
     "auth.recovery": "ACCOUNT HERSTEL",
     "auth.welcome": "Welkom terug",
@@ -13,6 +13,7 @@ export const authenticatedMessages = {
     "auth.signupHelp":
       "Je bevestigt eerst je e-mailadres. Daarna richt je je organisatie en eerste vestiging in.",
     "auth.sessionHelp": "Log in met het e-mailadres waarop je bent uitgenodigd.",
+    "auth.inviteOnly": "Alleen op uitnodiging. Nog geen account? Open de link die je planner je via WhatsApp stuurde.",
     "auth.name": "Naam",
     "auth.email": "E-mailadres",
     "auth.password": "Wachtwoord",
@@ -530,7 +531,7 @@ export const authenticatedMessages = {
     "language.label": "Language",
     "language.nl": "Nederlands",
     "language.en": "English",
-    "auth.secureLogin": "SECURE SIGN-IN",
+    "auth.secureLogin": "CLINIQ TEAM",
     "auth.start": "START YOUR PROFIT DIAGNOSIS",
     "auth.recovery": "ACCOUNT RECOVERY",
     "auth.welcome": "Welcome back",
@@ -540,6 +541,7 @@ export const authenticatedMessages = {
     "auth.signupHelp":
       "Confirm your email first, then set up your organisation and first venue.",
     "auth.sessionHelp": "Log in with the email address you were invited with.",
+    "auth.inviteOnly": "Invitation only. No account yet? Open the link your planner sent you on WhatsApp.",
     "auth.name": "Name",
     "auth.email": "Email address",
     "auth.password": "Password",

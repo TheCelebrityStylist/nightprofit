@@ -11,7 +11,7 @@ describe("roster-first planning experience", () => {
     expect(board).toContain('tx("Forecast ontbreekt", "Forecast missing")');
     expect(board).toContain('tx("Nog geen diensten", "No shifts yet")');
     expect(board).toContain('tx("Rooster nog niet klaar", "Roster not ready")');
-    expect(shell).toContain('path !== "/app/planning"');
+    expect(shell).toContain('!path.startsWith("/app/planning")');
   });
 
   it("moves advanced information behind contextual interactions", () => {
