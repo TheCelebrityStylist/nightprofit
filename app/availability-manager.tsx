@@ -12,11 +12,13 @@ export function AvailabilityManager({
   venueTimezone,
   venues,
   staff,
+  whatsappReady = false,
 }: {
   organisationId: string;
   venueTimezone: string;
   venues: Option[];
   staff: StaffOption[];
+  whatsappReady?: boolean;
 }) {
   const { t, locale } = useAuthLocale();
   const tx=(nl:string,en:string)=>locale==="nl"?nl:en;
@@ -31,6 +33,7 @@ export function AvailabilityManager({
   const [schedule,setSchedule]=useState(()=>defaultSchedule(venueTimezone));
   const [commandKey,setCommandKey]=useState(()=>crypto.randomUUID());
   const [recipientIds, setRecipientIds] = useState<Record<string, string>>({});
+  const [deliveries, setDeliveries] = useState<Record<string, { state: "sent" | "failed"; detail: string }>>({});
   const [shares, setShares] = useState<
     Record<
       string,
@@ -54,6 +57,7 @@ export function AvailabilityManager({
         deadlineAt: zonedInputToUtc(String(formData.get("deadlineAt")), venueTimezone),
         staffIds: selected,
         idempotencyKey: commandKey,
+        deliver: whatsappReady ? "whatsapp" : "manual",
       }),
     });
     const result = (await response.json()) as {
@@ -66,13 +70,15 @@ export function AvailabilityManager({
         string,
         { message: string; whatsappUrl: string | null; phoneState: "valid" | "missing" | "invalid" }
       >;
+      deliveries?: Record<string, { state: "sent" | "failed"; detail: string }>;
     };
     setPending(false);
     if (!response.ok) {
       setError(t("common.saveFailed"));
       return;
     }
-    setMessage(t("availability.prepared"));
+    setMessage(result.message ?? t("availability.prepared"));
+    setDeliveries(result.deliveries || {});
     setLinks(result.links || {});
     setRequestId(result.requestId || "");
     setRecipientIds(result.recipientIdsByStaff || {});
@@ -105,7 +111,7 @@ export function AvailabilityManager({
         <div><span>{tx("Geldig mobiel nummer","Valid mobile number")}</span><b>{selected.filter(id=>staff.find(person=>person.id===id)?.phoneState==="valid").length}</b></div>
         <div><span>{tx("Nummer ontbreekt of is ongeldig","Missing or invalid number")}</span><b>{selected.filter(id=>staff.find(person=>person.id===id)?.phoneState!=="valid").length}</b></div>
       </section>
-      <p className="delivery-readiness"><b>{tx("WhatsApp-provider niet verbonden.","WhatsApp provider not connected.")}</b> {tx("Persoonlijke links worden veilig voorbereid, maar niets wordt als verzonden of afgeleverd gemarkeerd. Deel links daarna handmatig.","Personal links will be prepared securely, but nothing is marked sent or delivered. Share links manually afterwards.")}</p>
+      {whatsappReady?<p className="delivery-readiness ready"><b>{tx("WhatsApp gekoppeld.","WhatsApp connected.")}</b> {tx("Iedereen met een geldig 06-nummer krijgt het verzoek direct van het Cliniq-nummer. Zonder nummer krijg je hieronder een link om zelf te delen.","Everyone with a valid mobile number gets the request directly from the venue number. Without a number you get a link below to share yourself.")}</p>:<p className="delivery-readiness"><b>{tx("WhatsApp nog niet gekoppeld.","WhatsApp not connected yet.")}</b> {tx("Je krijgt per persoon een link en een knop die WhatsApp opent met het bericht klaar. Jij drukt op verzenden.","You get a link per person and a button that opens WhatsApp with the message ready. You press send.")}</p>}
       <div className="workflow-fields">
         <label>
           {t("common.venue")}
@@ -170,13 +176,15 @@ export function AvailabilityManager({
           {message}
         </p>
       )}
-      {Object.entries(links).length ? (
+      {Object.values(deliveries).some(row=>row.state==="sent")?<ul className="delivery-list">{Object.entries(deliveries).filter(([,row])=>row.state==="sent").map(([id])=><li key={id}><b>{staff.find((s) => s.id === id)?.label}</b><span>{tx("Verstuurd via WhatsApp","Sent via WhatsApp")}</span></li>)}</ul>:null}
+      {Object.entries(links).filter(([id])=>deliveries[id]?.state!=="sent").length ? (
         <div className="copy-links">
           <b>{t("availability.fallback")}</b>
           <p>{t("availability.fallbackHelp")}</p>
-          {Object.entries(links).map(([id, url]) => (
+          {Object.entries(links).filter(([id])=>deliveries[id]?.state!=="sent").map(([id, url]) => (
             <div className="share-recipient" key={id}>
               <b>{staff.find((s) => s.id === id)?.label}</b>
+              {deliveries[id]?<em className="delivery-failed">{deliveries[id].detail}</em>:null}
               <span>
                 {shares[id]?.phoneState === "valid"
                   ? "WhatsApp"
@@ -216,7 +224,7 @@ export function AvailabilityManager({
         </div>
       ) : null}
       <button className="primary" disabled={pending || !selected.length || !staff.length} aria-busy={pending}>
-        {pending ? t("availability.sending") : t("availability.create")}
+        {pending ? t("availability.sending") : whatsappReady ? tx(`Verstuur via WhatsApp (${selected.length})`,`Send via WhatsApp (${selected.length})`) : t("availability.create")}
       </button>
     </form>
   );

@@ -22,6 +22,7 @@ import { InventoryCountWorkspace } from "./inventory-count-workspace";
 import { ReconciliationWorkspace } from "./reconciliation-workspace";
 import { RosterBoard } from "./roster-board";
 import { MyRoster } from "./my-roster";
+import { whatsappStatus } from "../lib/whatsapp/cloud";
 import { ServiceAutopilot } from "./service-autopilot";
 import "./real-app.css";
 
@@ -226,8 +227,8 @@ async function AuthenticatedAppContent({
     <div className="app-shell real-app">
       <aside>
         <Link href="/" className="brand">
-          <span className="logo">N</span>
-          <b>NightProfit</b>
+          <span className="cq-mark">CLI<span className="cq-n">N</span>IQ</span>
+          <span className="cq-mark-sub">Team</span>
         </Link>
         <div className="venue" aria-label={t("shell.currentOrganisation")}>
           <span>{organisation.name.slice(0, 2).toUpperCase()}</span>
@@ -1202,6 +1203,7 @@ async function planning(
       servicePatterns={servicePatterns}
       plannerUserIds={plannerUserIds}
       canManageMembers={Boolean(canManageMembers)}
+      whatsappReady={whatsappStatus().configured}
     />
   );
   /* The legacy form workspace remains below temporarily as a recovery reference,

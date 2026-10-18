@@ -4,11 +4,14 @@ import {requireMembership} from "../../../lib/auth/require-membership";
 import {createAvailabilityToken,hashAvailabilityToken} from "../../../lib/workforce/availability";
 import {normalizeDutchPhone} from "../../../lib/workforce/domain";
 import {assertSameOrigin,securityErrorResponse} from "../../../lib/http/security";
+import {createSupabaseAdminClient} from "../../../lib/supabase/admin";
+import {sendTemplate,whatsappConfig} from "../../../lib/whatsapp/cloud";
 
 const schema=z.object({
   organisationId:z.string().uuid(),venueId:z.string().uuid(),
   startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),deadlineAt:z.iso.datetime({local:true}),
   staffIds:z.array(z.string().uuid()).min(1).max(250),idempotencyKey:z.string().uuid(),
+  deliver:z.enum(["manual","whatsapp"]).default("manual"),
 });
 
 const updateSchema=z.object({
@@ -58,7 +61,26 @@ export async function POST(request:Request){
     if(command.replayed)return NextResponse.json({message:"Dit beschikbaarheidsverzoek was al voorbereid.",requestId:command.request_id,replayed:true,links:{},shares:{},recipientIdsByStaff:{}});
     const {data:createdRecipients,error:createdRecipientsError}=await supabase.from("availability_request_recipients").select("id,staff_id").eq("organisation_id",input.organisationId).eq("request_id",command.request_id);if(createdRecipientsError)throw createdRecipientsError;
     const recipientIdsByStaff=Object.fromEntries((createdRecipients??[]).map(row=>[row.staff_id,row.id]));
-    return NextResponse.json({message:`Beschikbaarheid voorbereid voor ${recipients.length} medewerker(s). Er is niets extern verstuurd.`,requestId:command.request_id,links:Object.fromEntries(links),shares,recipientIdsByStaff},{status:201});
+    const config=input.deliver==="whatsapp"?whatsappConfig():null;
+    if(input.deliver==="whatsapp"&&!config)return NextResponse.json({message:"Links voorbereid. WhatsApp is nog niet gekoppeld, deel ze handmatig.",requestId:command.request_id,links:Object.fromEntries(links),shares,recipientIdsByStaff,deliveries:{}},{status:201});
+    const deliveries:Record<string,{state:"sent"|"failed";detail:string}>={};
+    if(config){
+      const admin=(()=>{try{return createSupabaseAdminClient()}catch{return null}})();
+      const people=staff as unknown as {id:string;full_name:string;preferred_language:string;contact_phone:string|null}[];
+      const range=`${new Date(input.startsAt).toLocaleDateString("nl-NL",{day:"numeric",month:"short",timeZone:"Europe/Amsterdam"})} t/m ${new Date(input.endsAt).toLocaleDateString("nl-NL",{day:"numeric",month:"short",timeZone:"Europe/Amsterdam"})}`;
+      const deadline=new Date(input.deadlineAt).toLocaleString("nl-NL",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit",timeZone:"Europe/Amsterdam"});
+      for(const recipient of recipients){
+        const person=people.find(row=>row.id===recipient.staff_id);
+        const url=links.get(recipient.staff_id);
+        if(!person||!url)continue;
+        if(!recipient.destination_e164){deliveries[recipient.staff_id]={state:"failed",detail:recipient.phone_state==="missing"?"Geen telefoonnummer.":"Telefoonnummer is ongeldig."};continue;}
+        const result=await sendTemplate(config,recipient.destination_e164,"availability",[person.full_name.trim().split(/\s+/)[0],range,deadline,url]);
+        deliveries[recipient.staff_id]={state:result.ok?"sent":"failed",detail:result.ok?"Verstuurd via WhatsApp.":result.detail};
+        if(admin&&recipientIdsByStaff[recipient.staff_id])await admin.from("notification_outbox").insert({organisation_id:input.organisationId,venue_id:input.venueId,channel:"whatsapp",destination_e164:recipient.destination_e164,correlation_type:"availability_recipient",correlation_id:recipientIdsByStaff[recipient.staff_id],payload:{template:config.templates.availability,request_id:command.request_id},state:result.ok?"sent":"failed",provider_message_id:result.ok?result.messageId:null,failure_reason:result.ok?null:result.detail});
+      }
+    }
+    const sentCount=Object.values(deliveries).filter(row=>row.state==="sent").length;
+    return NextResponse.json({message:config?`${sentCount} van ${recipients.length} verzoeken verstuurd via WhatsApp.`:`Beschikbaarheid voorbereid voor ${recipients.length} medewerker(s). Er is niets extern verstuurd.`,requestId:command.request_id,links:Object.fromEntries(links),shares,recipientIdsByStaff,deliveries},{status:201});
   }catch(error){
     return securityErrorResponse(error)??NextResponse.json({errorCode:error instanceof z.ZodError?"VALIDATION_FAILED":"AVAILABILITY_REQUEST_FAILED"},{status:400});
   }
