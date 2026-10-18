@@ -27,7 +27,8 @@ type Sheet =
   | { kind: "publish" }
   | { kind: "team" }
   | { kind: "person" }
-  | { kind: "nights" };
+  | { kind: "nights" }
+  | { kind: "open"; date: string };
 
 type Toast = { text: string; tone?: "bad"; undo?: () => void };
 
@@ -37,6 +38,8 @@ const weekdayIndex = (date: string) => ((parse(date).getUTCDay() + 6) % 7) + 1;
 const dayLong = (date: string) => parse(date).toLocaleDateString("nl-NL", { weekday: "long", timeZone: "UTC" });
 const dayShort = (date: string) => parse(date).toLocaleDateString("nl-NL", { weekday: "short", timeZone: "UTC" }).replace(".", "");
 const dateShort = (date: string) => parse(date).toLocaleDateString("nl-NL", { day: "numeric", month: "short", timeZone: "UTC" }).replace(".", "");
+const addMonths = (date: string, months: number) => { const [year, month] = date.split("-").map(Number); return new Date(Date.UTC(year, month - 1 + months, 1, 12)).toISOString().slice(0, 10); };
+const monthLabel = (date: string) => parse(date).toLocaleDateString("nl-NL", { month: "long", year: "numeric", timeZone: "UTC" });
 const capital = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
 const initials = (name: string) => { const parts = name.trim().split(/\s+/); return `${parts[0]?.[0] ?? ""}${parts.length > 1 ? parts.at(-1)![0] : ""}`.toUpperCase(); };
 const shortName = (name: string) => { const parts = name.trim().split(/\s+/); return parts.length > 1 ? `${parts[0]} ${parts.at(-1)![0]}.` : parts[0]; };
@@ -82,8 +85,11 @@ export function Planner({
   const [now] = useState(() => Date.now());
   const today = nightOf(new Date(now).toISOString(), tz);
   // On Sunday the week is over; open on the coming week.
-  const homeWeek = weekdayIndex(today) === 7 ? addDays(mondayOf(today), 7) : mondayOf(today);
-  const [week, setWeek] = useState(homeWeek);
+  const homeFocus = weekdayIndex(today) === 7 ? addDays(today, 1) : today;
+  const homeWeek = mondayOf(homeFocus);
+  const [focus, setFocus] = useState(homeFocus);
+  const [mode, setMode] = useState<"day" | "week" | "month">("week");
+  const week = mondayOf(focus);
   const [lane, setLane] = useState<Lane>("staff");
   const [view, setView] = useState<"nights" | "people">("nights");
   const [shifts, setShifts] = useState(initialShifts);
@@ -299,6 +305,144 @@ export function Planner({
   const nowIndex = rawSteps.findIndex((step) => !step.done && step.ready);
   const steps = rawSteps.map((step, index) => ({ ...step, state: (index === nowIndex ? "now" : step.done ? "done" : "todo") as "now" | "done" | "todo" }));
 
+  // ---------- day / month helpers ----------
+  const atHome = mode === "day" ? focus === homeFocus : mode === "week" ? week === homeWeek : focus.slice(0, 7) === homeFocus.slice(0, 7);
+  function move(direction: 1 | -1) {
+    setMobileNight(null);
+    setFocus(mode === "day" ? addDays(focus, direction) : mode === "week" ? addDays(focus, 7 * direction) : addMonths(focus, direction));
+  }
+  const nightsOfLive = useMemo(() => {
+    const map = new Map<string, PlannerShift[]>();
+    for (const shift of shifts) {
+      if (shift.venue_id !== venue.id || shift.status === "cancelled" || shift.status === "rejected") continue;
+      const key = nightOf(shift.starts_at, tz);
+      const list = map.get(key);
+      if (list) list.push(shift); else map.set(key, [shift]);
+    }
+    return map;
+  }, [shifts, venue.id, tz]);
+  const dayHasPlan = (date: string) => (nightsOfLive.get(date) ?? []).length > 0;
+  const nightInfo = (date: string) => {
+    const rows = (nightsOfLive.get(date) ?? []).filter((shift) => laneOfRole(shift.role_id) === lane);
+    const filledCount = rows.filter((shift) => shift.staff_id).length;
+    return { total: rows.length, filled: filledCount, open: rows.length - filledCount, draft: rows.some((shift) => shift.status === "draft") };
+  };
+  const closedThisWeek = weekDates.filter((date) => date >= today && !nights.includes(date));
+  const monthStart = `${focus.slice(0, 7)}-01`;
+  const monthEnd = addDays(addMonths(focus, 1), -1);
+  const gridStart = mondayOf(monthStart);
+  const gridDays = Math.ceil((Math.round((parse(monthEnd).getTime() - parse(gridStart).getTime()) / 86400000) + 1) / 7) * 7;
+  const monthDays = Array.from({ length: gridDays }, (_, index) => addDays(gridStart, index));
+  const monthLoad = laneTeam
+    .map((person) => ({ person, count: [...nightsOfLive.entries()].filter(([date]) => date >= monthStart && date <= monthEnd).reduce((sum, [, rows]) => sum + rows.filter((shift) => shift.staff_id === person.id).length, 0) }))
+    .filter((row) => row.count > 0)
+    .sort((a, b) => b.count - a.count || a.person.full_name.localeCompare(b.person.full_name));
+  const monthLoadMax = Math.max(1, ...monthLoad.map((row) => row.count));
+  const dayGroups: { key: string; title: string; tone: string; people: PlannerStaff[] }[] = [
+    { key: "yes", title: "Kan", tone: "a-yes", people: laneTeam.filter((person) => answerOf(person.id, focus) === "available") },
+    { key: "maybe", title: "Liever niet", tone: "a-maybe", people: laneTeam.filter((person) => answerOf(person.id, focus) === "preferably_not") },
+    { key: "unknown", title: "Nog geen antwoord", tone: "a-unknown", people: laneTeam.filter((person) => !answerOf(person.id, focus)) },
+    { key: "no", title: "Kan niet", tone: "a-no", people: laneTeam.filter((person) => answerOf(person.id, focus) === "unavailable") },
+  ];
+
+  async function openNight(date: string, lines: Pattern["lines"] | null) {
+    setBusy(true);
+    try {
+      const response = await fetch("/api/planning/nights", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ organisationId, action: "night_plan", values: { venueId: venue.id, serviceDate: date, ...(lines ? { lines: JSON.stringify(lines) } : {}) } }) });
+      if (!response.ok) throw new Error();
+      setSheet(null);
+      setFocus(date);
+      say({ text: `${capital(dayLong(date))} ${dateShort(date)} staat open. Vraag beschikbaarheid of kies zelf wie werkt.` });
+      router.refresh();
+    } catch { say({ text: "Die avond openen lukte niet.", tone: "bad" }); } finally { setBusy(false); }
+  }
+  const venuePatterns = patterns.filter((pattern) => pattern.venue_id === venue.id && pattern.active && pattern.lines.length).sort((a, b) => a.iso_weekday - b.iso_weekday);
+  const peopleIn = (lines: Pattern["lines"]) => lines.filter((line) => laneOfRole(line.role_id) === "staff").reduce((sum, line) => sum + line.count, 0);
+  const djsIn = (lines: Pattern["lines"]) => lines.filter((line) => laneOfRole(line.role_id) === "dj").reduce((sum, line) => sum + line.count, 0);
+  function openNightChoices(date: string) {
+    const own = venuePatterns.find((pattern) => pattern.iso_weekday === weekdayIndex(date));
+    const others = venuePatterns.filter((pattern) => pattern !== own);
+    const weekdayName = (iso: number) => parse(addDays("2026-10-19", iso - 1)).toLocaleDateString("nl-NL", { weekday: "long", timeZone: "UTC" });
+    return (
+      <div className="pl-open">
+        <p>{capital(dayLong(date))} is nog dicht. Open hem met dezelfde plekken als een vaste avond:</p>
+        <div className="pl-open-options">
+          {own ? <button type="button" className="pl-btn pl-btn--go" disabled={busy} onClick={() => void openNight(date, null)}>Standaard {weekdayName(own.iso_weekday)}<small>{peopleIn(own.lines)} mensen{djsIn(own.lines) ? `, ${djsIn(own.lines)} DJ` : ""}</small></button> : null}
+          {others.map((pattern) => (
+            <button key={pattern.iso_weekday} type="button" className="pl-btn" disabled={busy} onClick={() => void openNight(date, pattern.lines)}>Zoals een {weekdayName(pattern.iso_weekday)}<small>{peopleIn(pattern.lines)} mensen{djsIn(pattern.lines) ? `, ${djsIn(pattern.lines)} DJ` : ""}</small></button>
+          ))}
+        </div>
+        <button type="button" className="pl-link" onClick={() => setSheet({ kind: "nights" })}>Andere tijden of aantallen instellen</button>
+      </div>
+    );
+  }
+
+  function nightCard(night: string, extra = "") {
+    const slots = slotsOf(night);
+    const groups: { key: string; first: PlannerShift; rows: PlannerShift[] }[] = [];
+    for (const slot of slots) {
+      const key = `${slot.role_id}|${slot.starts_at}|${slot.ends_at}`;
+      const group = groups.find((item) => item.key === key);
+      if (group) group.rows.push(slot); else groups.push({ key, first: slot, rows: [slot] });
+    }
+    const counts = { can: 0, maybe: 0, no: 0, unknown: 0 };
+    for (const person of laneTeam) {
+      const value = answerOf(person.id, night);
+      if (value === "available") counts.can += 1; else if (value === "preferably_not") counts.maybe += 1; else if (value === "unavailable") counts.no += 1; else counts.unknown += 1;
+    }
+    const past = night < today;
+    const multipleRoles = new Set(slots.map((slot) => slot.role_id)).size > 1;
+    const isDay = extra.includes("pl-night--day");
+    return (
+      <section key={night} className={`pl-night${night === shownNight ? " is-shown" : ""}${past ? " is-past" : ""}${extra}`} aria-label={`${dayLong(night)} ${dateShort(night)}`}>
+        <header>
+          {isDay ? <h2>{dayLong(night)}</h2> : <h2><button type="button" className="pl-night-open" onClick={() => { setFocus(night); setMode("day"); }}>{dayLong(night)}</button></h2>}
+          <div className="pl-night-meta">
+            <span>{dateShort(night)}</span>
+            {slots.length ? <b className={slots.every((slot) => slot.staff_id) ? "full" : ""}>{slots.filter((slot) => slot.staff_id).length}/{slots.length}</b> : null}
+          </div>
+          {laneTeam.length && currentRequest ? (
+            <p className="pl-night-answers" aria-label="Beschikbaarheid">
+              <span className="a-yes">{counts.can} kan</span>
+              {counts.maybe ? <span className="a-maybe">{counts.maybe} liever niet</span> : null}
+              {counts.no ? <span className="a-no">{counts.no} kan niet</span> : null}
+              {counts.unknown ? <span className="a-unknown">{counts.unknown} nog niet</span> : null}
+            </p>
+          ) : null}
+        </header>
+        {!slots.length ? (
+          <p className="pl-night-empty">Nog geen plekken voor {lane === "dj" ? "DJ's" : "personeel"}.</p>
+        ) : groups.map((group) => (
+          <div className="pl-group" key={group.key}>
+            <h3>{time(group.first.starts_at)} – {time(group.first.ends_at)}{multipleRoles ? <small>{roleById.get(group.first.role_id)?.name}</small> : null}</h3>
+            <ul>
+              {group.rows.map((slot) => {
+                const person = slot.staff_id ? personById.get(slot.staff_id) : undefined;
+                const value = slot.staff_id ? answerOf(slot.staff_id, night) : undefined;
+                return (
+                  <li key={slot.id}>
+                    <button type="button" className={`pl-slot${person ? " is-filled" : ""}${slot.status === "draft" ? " is-draft" : ""}`} onClick={() => setSheet({ kind: "slot", shiftId: slot.id })} disabled={past}>
+                      {person ? (
+                        <>
+                          <span className={`pl-avatar a-${value ?? "unknown"}`} aria-hidden>{initials(person.full_name)}</span>
+                          <span className="pl-slot-name">{shortName(person.full_name)}</span>
+                          {value === "preferably_not" ? <em className="a-maybe">liever niet</em> : value === "unavailable" ? <em className="a-no">kan niet</em> : null}
+                        </>
+                      ) : (
+                        <span className="pl-slot-open">Open plek</span>
+                      )}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            {!past ? <button type="button" className="pl-add" disabled={busy} onClick={() => void addSlot(group.first)}>+ plek</button> : null}
+          </div>
+        ))}
+      </section>
+    );
+  }
+
   return (
     <div className="pl">
       <header className="pl-head">
@@ -313,48 +457,125 @@ export function Planner({
       </header>
 
       <div className="pl-bar">
-        <div className="pl-week" role="group" aria-label="Week kiezen">
-          <button type="button" aria-label="Vorige week" onClick={() => { setWeek(addDays(week, -7)); setMobileNight(null); }}>‹</button>
-          <div><b>Week {weekNumber}</b><small>{dateShort(week)} – {dateShort(addDays(week, 6))}</small></div>
-          <button type="button" aria-label="Volgende week" onClick={() => { setWeek(addDays(week, 7)); setMobileNight(null); }}>›</button>
-          {week !== homeWeek ? <button type="button" className="pl-week-today" onClick={() => { setWeek(homeWeek); setMobileNight(null); }}>Nu</button> : null}
+        <div className="pl-week" role="group" aria-label="Periode kiezen">
+          <button type="button" aria-label={mode === "day" ? "Vorige dag" : mode === "week" ? "Vorige week" : "Vorige maand"} onClick={() => move(-1)}>‹</button>
+          {mode === "day" ? <div><b>{capital(dayLong(focus))}</b><small>{dateShort(focus)}, week {isoWeekNumber(focus)}</small></div>
+            : mode === "week" ? <div><b>Week {weekNumber}</b><small>{dateShort(week)} – {dateShort(addDays(week, 6))}</small></div>
+            : <div><b>{capital(monthLabel(focus).split(" ")[0])}</b><small>{monthLabel(focus).split(" ")[1]}</small></div>}
+          <button type="button" aria-label={mode === "day" ? "Volgende dag" : mode === "week" ? "Volgende week" : "Volgende maand"} onClick={() => move(1)}>›</button>
+          {!atHome ? <button type="button" className="pl-week-today" onClick={() => { setFocus(homeFocus); setMobileNight(null); }}>Nu</button> : null}
+        </div>
+        <div className="pl-modes" role="tablist" aria-label="Weergave">
+          {(["day", "week", "month"] as const).map((value) => <button key={value} type="button" role="tab" aria-selected={mode === value} className={mode === value ? "on" : ""} onClick={() => { if (value === "day" && mode === "week") setFocus(shownNight ?? focus); setMode(value); }}>{value === "day" ? "Dag" : value === "week" ? "Week" : "Maand"}</button>)}
         </div>
         {hasDj ? (
           <div className="pl-lanes" role="tablist" aria-label="Planning">
             {(["staff", "dj"] as Lane[]).map((which) => {
               const rows = weekShifts.filter((shift) => laneOfRole(shift.role_id) === which);
-              return <button key={which} type="button" role="tab" aria-selected={lane === which} className={lane === which ? "on" : ""} onClick={() => setLane(which)}>{which === "staff" ? "Personeel" : "DJ's"}{rows.length ? <span>{rows.filter((shift) => shift.staff_id).length}/{rows.length}</span> : null}</button>;
+              return <button key={which} type="button" role="tab" aria-selected={lane === which} className={lane === which ? "on" : ""} onClick={() => setLane(which)}>{which === "staff" ? "Personeel" : "DJ's"}{rows.length && mode === "week" ? <span>{rows.filter((shift) => shift.staff_id).length}/{rows.length}</span> : null}</button>;
             })}
           </div>
         ) : null}
-        <div className="pl-views" role="tablist" aria-label="Weergave">
-          <button type="button" role="tab" aria-selected={view === "nights"} className={view === "nights" ? "on" : ""} onClick={() => setView("nights")}>Per avond</button>
-          <button type="button" role="tab" aria-selected={view === "people"} className={view === "people" ? "on" : ""} onClick={() => setView("people")}>Per persoon</button>
-        </div>
+        {mode === "week" ? (
+          <div className="pl-views" role="tablist" aria-label="Indeling">
+            <button type="button" role="tab" aria-selected={view === "nights"} className={view === "nights" ? "on" : ""} onClick={() => setView("nights")}>Per avond</button>
+            <button type="button" role="tab" aria-selected={view === "people"} className={view === "people" ? "on" : ""} onClick={() => setView("people")}>Per persoon</button>
+          </div>
+        ) : null}
       </div>
 
-      <ol className={`pl-steps${nowIndex >= 0 ? " has-now" : ""}`}>
-        {steps.map((step, index) => (
-          <li key={step.title} className={`pl-step is-${step.state}`}>
-            <span className="pl-step-n" aria-hidden>{step.state === "done" ? "✓" : index + 1}</span>
-            <div><b>{step.title}</b><small>{step.text}</small></div>
-            {step.action ? <span className="pl-step-action">{step.action}</span> : null}
-          </li>
-        ))}
-      </ol>
+      {mode !== "month" ? (
+        <ol className={`pl-steps${nowIndex >= 0 ? " has-now" : ""}`}>
+          {steps.map((step, index) => (
+            <li key={step.title} className={`pl-step is-${step.state}`}>
+              <span className="pl-step-n" aria-hidden>{step.state === "done" ? "✓" : index + 1}</span>
+              <div><b>{step.title}</b><small>{step.text}</small></div>
+              {step.action ? <span className="pl-step-action">{step.action}</span> : null}
+            </li>
+          ))}
+        </ol>
+      ) : null}
 
-      {missingNights.length ? (
+      {mode === "week" && missingNights.length ? (
         <div className="pl-prepare">
           <p>De standaardweek zet de vaste plekken voor {nightsLabel(missingNights)} klaar. Daarna kies je per plek wie er werkt.</p>
           <button type="button" className="pl-btn pl-btn--go" disabled={busy} onClick={() => void prepareWeek()}>Zet week {weekNumber} klaar</button>
         </div>
       ) : null}
 
-      {!nights.length ? (
+      {mode === "month" ? (
+        <div className="pl-month">
+          <div className="pl-cal" role="grid" aria-label={monthLabel(focus)}>
+            {["ma", "di", "wo", "do", "vr", "za", "zo"].map((day) => <span key={day} className="pl-cal-head" role="columnheader">{day}</span>)}
+            {monthDays.map((date) => {
+              const info = nightInfo(date);
+              const inMonth = date.slice(0, 7) === focus.slice(0, 7);
+              return (
+                <button key={date} type="button" role="gridcell" className={`pl-cal-day${inMonth ? "" : " is-out"}${info.total ? " is-open" : ""}${date === today ? " is-today" : ""}${date < today ? " is-past" : ""}`} onClick={() => { setFocus(date); setMode("day"); }} aria-label={`${dayLong(date)} ${dateShort(date)}: ${info.total ? `${info.filled} van ${info.total} plekken gevuld` : "dicht"}`}>
+                  <b>{parse(date).getUTCDate()}</b>
+                  {info.total ? (
+                    <>
+                      <span className="pl-cal-fill"><i style={{ width: `${Math.round((info.filled / info.total) * 100)}%` }} /></span>
+                      <small className={info.open ? "a-maybe" : "a-yes"}>{info.open ? `${info.open} open` : "rond"}</small>
+                      {info.draft ? <em title="Niet gepubliceerd">concept</em> : null}
+                    </>
+                  ) : activeWeekdays.has(weekdayIndex(date)) && date >= today ? <small className="pl-cal-std">standaard</small> : null}
+                </button>
+              );
+            })}
+          </div>
+          <div className="pl-load-list" aria-label="Inzet deze maand">
+            <h3>Inzet in {monthLabel(focus).split(" ")[0]}<span>{lane === "dj" ? "DJ's" : "personeel"}</span></h3>
+            {monthLoad.length ? (
+              <ol>
+                {monthLoad.map((row) => (
+                  <li key={row.person.id}>
+                    <span>{shortName(row.person.full_name)}</span>
+                    <span className="pl-load-bar"><i style={{ width: `${Math.round((row.count / monthLoadMax) * 100)}%` }} /></span>
+                    <b>{row.count}</b>
+                  </li>
+                ))}
+              </ol>
+            ) : <p className="pl-note">Nog niemand ingepland deze maand.</p>}
+          </div>
+        </div>
+      ) : mode === "day" ? (
+        <div className="pl-day">
+          {dayHasPlan(focus) ? nightCard(focus, " is-shown pl-night--day") : (
+            <section className="pl-night pl-night--day is-shown pl-closed">
+              <header><h2>{dayLong(focus)}</h2><div className="pl-night-meta"><span>{dateShort(focus)}</span></div></header>
+              {focus < today ? <p className="pl-night-empty">Deze avond is voorbij en was dicht.</p> : openNightChoices(focus)}
+            </section>
+          )}
+          {dayHasPlan(focus) ? <div className="pl-day-people" aria-label="Wie kan">
+            <h3>Wie kan {dayLong(focus)}?</h3>
+            {dayGroups.map((group) => group.people.length ? (
+              <section key={group.key}>
+                <h4 className={group.tone}>{group.title}<span>{group.people.length}</span></h4>
+                <ul>
+                  {group.people.map((person) => {
+                    const shift = shiftOn(person.id, focus);
+                    return (
+                      <li key={person.id}>
+                        <button type="button" disabled={focus < today || !dayHasPlan(focus)} onClick={() => setSheet({ kind: "cell", staffId: person.id, night: focus })}>
+                          <span className={`pl-avatar ${group.tone}`} aria-hidden>{initials(person.full_name)}</span>
+                          <span className="pl-picker-name">{person.full_name}<small>{shift ? `Werkt ${time(shift.starts_at)} – ${time(shift.ends_at)}` : weekLoad(person.id) === 0 ? "Nog geen dienst deze week" : `${weekLoad(person.id)} ${weekLoad(person.id) === 1 ? "dienst" : "diensten"} deze week`}</small></span>
+                          {shift ? <em className="pl-on">ingepland</em> : null}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            ) : null)}
+            {!laneTeam.length ? <p className="pl-note">Nog niemand in dit team.</p> : null}
+          </div> : null}
+        </div>
+      ) : !nights.length ? (
         <div className="pl-empty">
           <h2>Geen avonden in week {weekNumber}</h2>
-          <p>{activeWeekdays.size ? "Deze week valt buiten je standaardweek." : "Stel eerst je standaardweek in: welke dagen je open bent en hoeveel mensen je per avond nodig hebt."}</p>
-          <button type="button" className="pl-btn pl-btn--go" onClick={() => setSheet({ kind: "nights" })}>{activeWeekdays.size ? "Extra avond openen" : "Standaardweek instellen"}</button>
+          <p>{activeWeekdays.size ? "Deze week valt buiten je standaardweek. Open een avond als er iets is." : "Stel eerst je standaardweek in: welke dagen je open bent en hoeveel mensen je per avond nodig hebt."}</p>
+          <button type="button" className="pl-btn pl-btn--go" onClick={() => setSheet(activeWeekdays.size ? { kind: "open", date: weekDates.find((date) => date >= today) ?? week } : { kind: "nights" })}>{activeWeekdays.size ? "Avond openen" : "Standaardweek instellen"}</button>
         </div>
       ) : view === "nights" ? (
         <>
@@ -364,79 +585,18 @@ export function Planner({
               const gaps = slots.filter((shift) => !shift.staff_id).length;
               return <button key={night} type="button" role="tab" aria-selected={night === shownNight} className={night === shownNight ? "on" : ""} onClick={() => setMobileNight(night)}><b>{dayShort(night)}</b><span>{parse(night).getUTCDate()}</span>{slots.length ? <i className={gaps ? "gap" : "full"}>{gaps ? gaps : "✓"}</i> : null}</button>;
             })}
+            {closedThisWeek.length ? <button type="button" className="pl-daytab-add" aria-label="Andere avond openen" onClick={() => setSheet({ kind: "open", date: closedThisWeek[0] })}><b>+</b><span>open</span></button> : null}
           </div>
           <div className="pl-nights" style={{ ["--pl-cols" as string]: String(nights.length) }}>
-            {nights.map((night) => {
-              const slots = slotsOf(night);
-              const groups: { key: string; first: PlannerShift; rows: PlannerShift[] }[] = [];
-              for (const slot of slots) {
-                const key = `${slot.role_id}|${slot.starts_at}|${slot.ends_at}`;
-                const group = groups.find((item) => item.key === key);
-                if (group) group.rows.push(slot); else groups.push({ key, first: slot, rows: [slot] });
-              }
-              const counts = { can: 0, maybe: 0, no: 0, unknown: 0 };
-              for (const person of laneTeam) {
-                const value = answerOf(person.id, night);
-                if (value === "available") counts.can += 1; else if (value === "preferably_not") counts.maybe += 1; else if (value === "unavailable") counts.no += 1; else counts.unknown += 1;
-              }
-              const past = night < today;
-              const multipleRoles = new Set(slots.map((slot) => slot.role_id)).size > 1;
-              return (
-                <section key={night} className={`pl-night${night === shownNight ? " is-shown" : ""}${past ? " is-past" : ""}`} aria-label={`${dayLong(night)} ${dateShort(night)}`}>
-                  <header>
-                    <h2>{dayLong(night)}</h2>
-                    <div className="pl-night-meta">
-                      <span>{dateShort(night)}</span>
-                      {slots.length ? <b className={slots.every((slot) => slot.staff_id) ? "full" : ""}>{slots.filter((slot) => slot.staff_id).length}/{slots.length}</b> : null}
-                    </div>
-                    {laneTeam.length && currentRequest ? (
-                      <p className="pl-night-answers" aria-label="Beschikbaarheid">
-                        <span className="a-yes">{counts.can} kan</span>
-                        {counts.maybe ? <span className="a-maybe">{counts.maybe} liever niet</span> : null}
-                        {counts.no ? <span className="a-no">{counts.no} kan niet</span> : null}
-                        {counts.unknown ? <span className="a-unknown">{counts.unknown} nog niet</span> : null}
-                      </p>
-                    ) : null}
-                  </header>
-                  {!slots.length ? (
-                    <p className="pl-night-empty">Nog geen plekken voor {lane === "dj" ? "DJ's" : "personeel"}.</p>
-                  ) : groups.map((group) => (
-                    <div className="pl-group" key={group.key}>
-                      <h3>{time(group.first.starts_at)} – {time(group.first.ends_at)}{multipleRoles ? <small>{roleById.get(group.first.role_id)?.name}</small> : null}</h3>
-                      <ul>
-                        {group.rows.map((slot) => {
-                          const person = slot.staff_id ? personById.get(slot.staff_id) : undefined;
-                          const value = slot.staff_id ? answerOf(slot.staff_id, night) : undefined;
-                          return (
-                            <li key={slot.id}>
-                              <button type="button" className={`pl-slot${person ? " is-filled" : ""}${slot.status === "draft" ? " is-draft" : ""}`} onClick={() => setSheet({ kind: "slot", shiftId: slot.id })} disabled={past}>
-                                {person ? (
-                                  <>
-                                    <span className={`pl-avatar a-${value ?? "unknown"}`} aria-hidden>{initials(person.full_name)}</span>
-                                    <span className="pl-slot-name">{shortName(person.full_name)}</span>
-                                    {value === "preferably_not" ? <em className="a-maybe">liever niet</em> : value === "unavailable" ? <em className="a-no">kan niet</em> : null}
-                                  </>
-                                ) : (
-                                  <span className="pl-slot-open">Open plek</span>
-                                )}
-                              </button>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                      {!past ? <button type="button" className="pl-add" disabled={busy} onClick={() => void addSlot(group.first)}>+ plek</button> : null}
-                    </div>
-                  ))}
-                </section>
-              );
-            })}
+            {nights.map((night) => nightCard(night))}
           </div>
+          {closedThisWeek.length ? <button type="button" className="pl-open-night" onClick={() => setSheet({ kind: "open", date: closedThisWeek[0] })}>+ Andere avond openen, bijvoorbeeld voor een event</button> : null}
         </>
       ) : (
         <div className="pl-people">
           <table>
             <thead>
-              <tr><th scope="col">{lane === "dj" ? "DJ" : "Naam"}</th>{nights.map((night) => <th scope="col" key={night}><b>{dayShort(night)}</b><span>{parse(night).getUTCDate()}</span></th>)}<th scope="col">Diensten</th></tr>
+              <tr><th scope="col">{lane === "dj" ? "DJ" : "Naam"}</th>{nights.map((night) => <th scope="col" key={night}><button type="button" className="pl-th-day" onClick={() => { setFocus(night); setMode("day"); }}><b>{dayShort(night)}</b><span>{parse(night).getUTCDate()}</span></button></th>)}<th scope="col">Diensten</th></tr>
             </thead>
             <tbody>
               {laneTeam.map((person) => (
@@ -554,6 +714,17 @@ export function Planner({
                 onClose={() => setSheet({ kind: "team" })}
               />
             ) : <p>Alleen de eigenaar of een beheerder kan mensen toevoegen.</p>
+          ) : sheet.kind === "open" ? (
+            <div className="pl-open-sheet">
+              <h3>Welke dag?</h3>
+              <div className="pl-daypick"><div>
+                {Array.from({ length: 7 }, (_, index) => addDays(mondayOf(sheet.date), index)).map((date) => (
+                  <button key={date} type="button" disabled={date < today || dayHasPlan(date)} aria-pressed={date === sheet.date} className={date === sheet.date ? "on" : ""} onClick={() => setSheet({ kind: "open", date })}><b>{dayShort(date)}</b><span>{parse(date).getUTCDate()}</span></button>
+                ))}
+              </div></div>
+              <label className="pl-date-input">Of kies een datum<input type="date" min={today} value={sheet.date} onChange={(event) => event.target.value && setSheet({ kind: "open", date: event.target.value })} /></label>
+              {dayHasPlan(sheet.date) ? <p className="pl-note">{capital(dayLong(sheet.date))} {dateShort(sheet.date)} staat al open.</p> : openNightChoices(sheet.date)}
+            </div>
           ) : sheet.kind === "nights" ? (
             <ServiceNightsPanel
               organisationId={organisationId}
@@ -587,6 +758,7 @@ export function Planner({
     if (value.kind === "publish") return `Week ${weekNumber} publiceren`;
     if (value.kind === "team") return "Team";
     if (value.kind === "person") return "Persoon toevoegen";
+    if (value.kind === "open") return "Avond openen";
     return "Avonden";
   }
 }
