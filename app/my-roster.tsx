@@ -1,150 +1,139 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
+import { addDays, deadlineLabel, mondayOf, nightOf, nightsLabel } from "../lib/planning/nights";
 
 type Colleague = { name: string; role_name: string; starts_at: string; ends_at: string };
 type MyShift = { id: string; venue_id: string; starts_at: string; ends_at: string; break_minutes: number; status: string; role_name: string; department_kind: string; colleagues: Colleague[] };
-type AvailabilityRow = { starts_at: string; availability: string };
-type State = "available" | "preferably_not" | "unavailable";
+type Answer = "available" | "preferably_not" | "unavailable";
+export type MyRequest = { id: string; venue_id: string; nights: string[]; deadline_at: string; status: string; answers: Record<string, string> };
 
-const dayMs = 86400000;
-const mondayOf = (value: Date) => { const date = new Date(value); date.setHours(0, 0, 0, 0); date.setDate(date.getDate() - ((date.getDay() + 6) % 7)); return date; };
-const localDate = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-const isoWeekday = (date: Date) => ((date.getDay() + 6) % 7) + 1;
+const CHOICES: { value: Answer; label: string; en: string }[] = [
+  { value: "available", label: "Kan", en: "Can" },
+  { value: "preferably_not", label: "Liever niet", en: "Rather not" },
+  { value: "unavailable", label: "Kan niet", en: "Can't" },
+];
+const parse = (date: string) => new Date(`${date}T12:00:00Z`);
 
 export function MyRoster({
   organisationId,
-  venueId,
   venueName,
   timezone,
   firstName,
   shifts,
-  availability,
-  openWeekdays,
+  requests,
   locale,
 }: {
   organisationId: string;
-  venueId: string;
   venueName: string;
   timezone: string;
   firstName: string;
   shifts: MyShift[];
-  availability: AvailabilityRow[];
-  openWeekdays: number[];
+  requests: MyRequest[];
   locale: "nl" | "en";
 }) {
   const tx = (nl: string, en: string) => (locale === "nl" ? nl : en);
   const intl = locale === "nl" ? "nl-NL" : "en-GB";
-  const time = (value: string) => new Date(value).toLocaleTimeString(intl, { hour: "2-digit", minute: "2-digit", timeZone: timezone });
-  const dayLabel = (value: Date | string, long = true) => new Date(value).toLocaleDateString(intl, { weekday: long ? "long" : "short", day: "numeric", month: "short", timeZone: timezone });
+  const time = (iso: string) => new Date(iso).toLocaleTimeString(intl, { hour: "2-digit", minute: "2-digit", timeZone: timezone });
+  const dayName = (date: string) => parse(date).toLocaleDateString(intl, { weekday: "long", timeZone: "UTC" });
+  const dateText = (date: string) => parse(date).toLocaleDateString(intl, { day: "numeric", month: "long", timeZone: "UTC" });
   const [now] = useState(() => Date.now());
-  const thisMonday = useMemo(() => mondayOf(new Date(now)), [now]);
+  const today = nightOf(new Date(now).toISOString(), timezone);
   const [week, setWeek] = useState(0);
-  const [showAllDays, setShowAllDays] = useState(openWeekdays.length === 0);
-  const [answers, setAnswers] = useState<Record<string, State | "">>(() => {
-    const result: Record<string, State | ""> = {};
-    for (const row of availability) {
-      const start = new Date(row.starts_at);
-      const key = localDate(new Date(start.getTime() - (start.getHours() < 12 ? dayMs : 0)));
-      result[key] = row.availability === "preferred" ? "available" : (row.availability as State);
-    }
-    return result;
-  });
+  const [answers, setAnswers] = useState<Record<string, Record<string, Answer>>>(() => Object.fromEntries(requests.map((request) => [request.id, Object.fromEntries(Object.entries(request.answers).map(([date, value]) => [date, (value === "preferred" ? "available" : value) as Answer]))])));
   const [saving, setSaving] = useState("");
+  const [saved, setSaved] = useState("");
   const [error, setError] = useState("");
 
-  const upcoming = shifts.filter((shift) => new Date(shift.ends_at).getTime() > now);
+  const upcoming = shifts.filter((shift) => new Date(shift.ends_at).getTime() > now).sort((a, b) => a.starts_at.localeCompare(b.starts_at));
   const next = upcoming[0];
-  const weekStart = new Date(thisMonday.getTime() + week * 7 * dayMs);
-  const weekEnd = new Date(weekStart.getTime() + 7 * dayMs);
-  const weekShifts = shifts.filter((shift) => new Date(shift.starts_at) >= weekStart && new Date(shift.starts_at) < weekEnd);
-  const weekMinutes = weekShifts.reduce((sum, shift) => sum + Math.max(0, (new Date(shift.ends_at).getTime() - new Date(shift.starts_at).getTime()) / 60000 - shift.break_minutes), 0);
+  const monday = addDays(mondayOf(today), week * 7);
+  const weekShifts = shifts.filter((shift) => { const night = nightOf(shift.starts_at, timezone); return night >= monday && night < addDays(monday, 7); }).sort((a, b) => a.starts_at.localeCompare(b.starts_at));
   const weekTitle = week === 0 ? tx("Deze week", "This week") : week === 1 ? tx("Volgende week", "Next week") : tx(`Over ${week} weken`, `In ${week} weeks`);
 
-  const nights = Array.from({ length: 35 }, (_, index) => new Date(thisMonday.getTime() + index * dayMs)).filter((day) => day.getTime() + dayMs > now);
-  const shownNights = showAllDays ? nights : nights.filter((day) => openWeekdays.includes(isoWeekday(day)));
-  const unanswered = nights.filter((day) => openWeekdays.includes(isoWeekday(day)) && !answers[localDate(day)]).length;
-
-  async function answer(day: Date, state: State) {
-    const key = localDate(day);
-    const nextState = answers[key] === state ? "" : state;
-    setAnswers((current) => ({ ...current, [key]: nextState }));
-    setSaving(key);
+  async function choose(request: MyRequest, night: string, value: Answer) {
+    const before = answers[request.id] ?? {};
+    const nextAnswers = { ...before, [night]: value };
+    setAnswers((current) => ({ ...current, [request.id]: nextAnswers }));
+    setSaving(`${request.id}|${night}`);
     setError("");
     try {
-      const response = await fetch("/api/workforce/my-availability", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ organisationId, venueId, entries: [{ date: key, availability: nextState }] }) });
-      if (!response.ok) throw new Error();
-    } catch {
-      setAnswers((current) => ({ ...current, [key]: answers[key] ?? "" }));
-      setError(tx("Opslaan lukte niet. Check je verbinding en probeer opnieuw.", "Couldn't save. Check your connection and try again."));
+      const response = await fetch("/api/workforce/my-availability", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ organisationId, requestId: request.id, entries: Object.entries(nextAnswers).map(([date, availability]) => ({ date, availability })) }) });
+      const body = (await response.json().catch(() => ({}))) as { errorCode?: string };
+      if (!response.ok) throw new Error(body.errorCode);
+      setSaved(request.id);
+    } catch (caught) {
+      setAnswers((current) => ({ ...current, [request.id]: before }));
+      setError(caught instanceof Error && caught.message === "DEADLINE_PASSED" ? tx("De deadline is voorbij. Laat het je planner zelf weten.", "The deadline has passed. Tell your planner directly.") : tx("Opslaan lukte niet. Check je verbinding en tik nog een keer.", "Couldn't save. Check your connection and tap again."));
     } finally {
       setSaving("");
     }
   }
 
   return (
-    <div className="my-roster">
-      <section className="my-next">
-        <span className="eyebrow">{venueName || tx("JOUW ROOSTER", "YOUR ROSTER")}</span>
-        <h2>{tx(`Hoi ${firstName}`, `Hi ${firstName}`)}</h2>
-        {next ? (
-          <article className="my-next-card">
-            <small>{tx("Je volgende dienst", "Your next shift")}</small>
-            <b>{dayLabel(next.starts_at)}</b>
-            <strong>{time(next.starts_at)}–{time(next.ends_at)}</strong>
-            <span>{next.role_name}{next.colleagues.length ? ` · ${tx("met", "with")} ${next.colleagues.slice(0, 4).map((person) => person.name).join(", ")}${next.colleagues.length > 4 ? ` +${next.colleagues.length - 4}` : ""}` : ""}</span>
-          </article>
-        ) : (
-          <p className="my-empty">{tx("Nog geen gepubliceerde diensten. Geef hieronder door wanneer je kunt.", "No published shifts yet. Let us know below when you can work.")}</p>
-        )}
-      </section>
+    <div className="me">
+      <header className="me-hello">
+        <h1>{tx("Hoi", "Hi")} {firstName}</h1>
+        <p>
+          {next
+            ? <>{tx("Je volgende dienst bij", "Your next shift at")} {venueName}: <b>{dayName(nightOf(next.starts_at, timezone))} {dateText(nightOf(next.starts_at, timezone))}, {time(next.starts_at)} – {time(next.ends_at)}</b>.</>
+            : tx(`Je staat nog niet ingepland bij ${venueName}.`, `You're not on the ${venueName} roster yet.`)}
+        </p>
+      </header>
 
-      <section className="my-week">
-        <header>
-          <button type="button" aria-label={tx("Vorige week", "Previous week")} disabled={week === 0} onClick={() => setWeek((value) => Math.max(0, value - 1))}>←</button>
-          <div><b>{weekTitle}</b><small>{dayLabel(weekStart, false)} – {dayLabel(new Date(weekEnd.getTime() - dayMs), false)}{weekShifts.length ? ` · ${Math.round(weekMinutes / 6) / 10} ${tx("uur", "h")}` : ""}</small></div>
-          <button type="button" aria-label={tx("Volgende week", "Next week")} disabled={week >= 4} onClick={() => setWeek((value) => Math.min(4, value + 1))}>→</button>
-        </header>
+      {requests.map((request) => {
+        const mine = answers[request.id] ?? {};
+        const nights = [...request.nights].sort();
+        const done = nights.every((night) => mine[night]);
+        return (
+          <section className="me-ask" key={request.id} aria-labelledby={`ask-${request.id}`}>
+            <h2 id={`ask-${request.id}`}>{done ? tx("Dank je!", "Thanks!") : tx(`Kun je ${nightsLabel(nights)}?`, `Can you work ${nightsLabel(nights, "en")}?`)}</h2>
+            <p>{done ? tx(`Je planner ziet je antwoorden. Aanpassen kan tot ${deadlineLabel(request.deadline_at, timezone)}.`, `Your planner can see your answers. You can change them until ${deadlineLabel(request.deadline_at, timezone, "en")}.`) : tx(`Laat het weten vóór ${deadlineLabel(request.deadline_at, timezone)}.`, `Let us know before ${deadlineLabel(request.deadline_at, timezone, "en")}.`)}</p>
+            <ul>
+              {nights.map((night) => (
+                <li key={night}>
+                  <div className="me-night"><b>{dayName(night)}</b><span>{dateText(night)}</span></div>
+                  <div className="me-choice" role="group" aria-label={`${dayName(night)} ${dateText(night)}`}>
+                    {CHOICES.map((choice) => (
+                      <button key={choice.value} type="button" aria-pressed={mine[night] === choice.value} className={`c-${choice.value}${mine[night] === choice.value ? " on" : ""}`} disabled={saving === `${request.id}|${night}`} onClick={() => void choose(request, night, choice.value)}>
+                        {tx(choice.label, choice.en)}
+                      </button>
+                    ))}
+                  </div>
+                </li>
+              ))}
+            </ul>
+            {saved === request.id && !error ? <small className="me-saved" role="status">{tx("Opgeslagen", "Saved")}</small> : null}
+          </section>
+        );
+      })}
+      {error ? <p className="me-error" role="alert">{error}</p> : null}
+
+      <section className="me-week" aria-labelledby="me-week-title">
+        <div className="me-week-head">
+          <h2 id="me-week-title">{weekTitle}</h2>
+          <div className="me-week-nav">
+            <button type="button" aria-label={tx("Vorige week", "Previous week")} disabled={week <= 0} onClick={() => setWeek(week - 1)}>‹</button>
+            <button type="button" aria-label={tx("Volgende week", "Next week")} disabled={week >= 4} onClick={() => setWeek(week + 1)}>›</button>
+          </div>
+        </div>
         {weekShifts.length ? (
-          <ul>
-            {weekShifts.map((shift) => (
-              <li key={shift.id}>
-                <div className="my-shift-day"><b>{new Date(shift.starts_at).toLocaleDateString(intl, { weekday: "short", timeZone: timezone })}</b><span>{new Date(shift.starts_at).toLocaleDateString(intl, { day: "numeric", timeZone: timezone })}</span></div>
-                <div className="my-shift-main">
-                  <strong>{time(shift.starts_at)}–{time(shift.ends_at)}</strong>
-                  <small>{shift.role_name}</small>
-                  {shift.colleagues.length ? <p>{tx("Met", "With")} {shift.colleagues.map((person) => person.name).join(", ")}</p> : null}
-                </div>
-              </li>
-            ))}
+          <ul className="me-shifts">
+            {weekShifts.map((shift) => {
+              const night = nightOf(shift.starts_at, timezone);
+              const others = shift.colleagues.map((colleague) => (colleague.role_name === "DJ" ? `DJ ${colleague.name}` : colleague.name));
+              return (
+                <li key={shift.id} className={night < today ? "is-past" : ""}>
+                  <div className="me-shift-day"><b>{dayName(night)}</b><span>{dateText(night)}</span></div>
+                  <div className="me-shift-time">{time(shift.starts_at)} – {time(shift.ends_at)}<small>{shift.role_name}</small></div>
+                  {others.length ? <p>{tx("Met", "With")} {others.length > 1 ? `${others.slice(0, -1).join(", ")} ${tx("en", "and")} ${others.at(-1)}` : others[0]}</p> : null}
+                </li>
+              );
+            })}
           </ul>
         ) : (
-          <p className="my-empty">{week === 0 ? tx("Deze week sta je niet ingeroosterd.", "You're not scheduled this week.") : tx("Nog niets gepubliceerd voor deze week.", "Nothing published for this week yet.")}</p>
+          <p className="me-empty">{tx("Geen diensten deze week.", "No shifts this week.")}{week === 0 && !requests.length ? tx(" Als je planner iets vraagt, zie je het hier.", " When your planner asks you something, it shows up here.") : ""}</p>
         )}
-      </section>
-
-      <section className="my-availability">
-        <header>
-          <div><b>{tx("Wanneer kun je werken?", "When can you work?")}</b><small>{unanswered ? tx(`${unanswered} open avonden nog niet ingevuld`, `${unanswered} opening nights not answered yet`) : tx("Alles ingevuld. Wijzigen kan altijd.", "All answered. You can change it any time.")}</small></div>
-          {openWeekdays.length ? <button type="button" className="ghost" onClick={() => setShowAllDays((value) => !value)}>{showAllDays ? tx("Alleen open avonden", "Opening nights only") : tx("Alle dagen", "All days")}</button> : null}
-        </header>
-        {error ? <p className="my-error" role="alert">{error}</p> : null}
-        <ul>
-          {shownNights.map((day) => {
-            const key = localDate(day);
-            const value = answers[key] ?? "";
-            return (
-              <li key={key} className={isoWeekday(day) === 1 ? "week-break" : ""}>
-                <span className="my-night">{day.toLocaleDateString(intl, { weekday: "short", day: "numeric", month: "short" })}</span>
-                <div className="my-choice" role="group" aria-label={day.toLocaleDateString(intl, { weekday: "long", day: "numeric", month: "long" })}>
-                  {([["available", tx("Kan", "Can")], ["preferably_not", tx("Liever niet", "Rather not")], ["unavailable", tx("Kan niet", "Can't")]] as const).map(([state, text]) => (
-                    <button type="button" key={state} aria-pressed={value === state} className={value === state ? `on ${state}` : ""} disabled={saving === key} onClick={() => void answer(day, state)}>{text}</button>
-                  ))}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
       </section>
     </div>
   );

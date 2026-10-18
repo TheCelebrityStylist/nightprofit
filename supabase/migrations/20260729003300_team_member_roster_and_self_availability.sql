@@ -1,5 +1,5 @@
 -- Team members see only published rosters, read their own week with the
--- colleagues they work with, and give availability per night themselves.
+-- colleagues they work with. Availability answers live in 20260729003400.
 
 -- Drafts are the planner's workspace; the team only sees what was published.
 alter policy shifts_read on public.shifts using (
@@ -39,43 +39,5 @@ begin
   return jsonb_build_object('staff',jsonb_build_object('id',me.id,'full_name',me.full_name),'shifts',result);
 end $$;
 
--- Availability per night, given by the employee or DJ themselves.
--- entries = [{date "YYYY-MM-DD", availability}] ; a night runs 18:00 -> 05:00 local,
--- the same window the WhatsApp availability link uses. The latest answer for a night wins;
--- an empty availability clears the night.
-create or replace function public.set_my_availability(
-  target_organisation_id uuid, target_venue_id uuid, target_entries jsonb
-) returns jsonb
-language plpgsql security definer set search_path=''
-as $$
-declare me public.staff_profiles; item jsonb; venue_tz text; night date; start_at timestamptz; end_at timestamptz; saved integer:=0;
-begin
-  select * into me from public.staff_profiles where organisation_id=target_organisation_id and auth_user_id=auth.uid();
-  if me.id is null or me.employment_status='deactivated' then raise exception 'no_staff_profile'; end if;
-  if not exists(select 1 from public.staff_venue_assignments a where a.organisation_id=target_organisation_id and a.staff_id=me.id and a.venue_id=target_venue_id) then raise exception 'not_assigned_to_venue'; end if;
-  select coalesce(nullif(timezone,''),'Europe/Amsterdam') into venue_tz from public.venues where organisation_id=target_organisation_id and id=target_venue_id;
-  if jsonb_typeof(target_entries)<>'array' or jsonb_array_length(target_entries)>120 then raise exception 'invalid_entries'; end if;
-  for item in select value from jsonb_array_elements(target_entries) loop
-    night=(item->>'date')::date;
-    if night<current_date-1 or night>current_date+180 then raise exception 'date_out_of_range'; end if;
-    if coalesce(item->>'availability','') not in ('','available','preferred','preferably_not','unavailable') then raise exception 'invalid_availability'; end if;
-    start_at=(night+time '18:00') at time zone venue_tz;
-    end_at=((night+1)+time '05:00') at time zone venue_tz;
-    delete from public.staff_availability
-      where organisation_id=target_organisation_id and venue_id=target_venue_id and staff_id=me.id
-        and source in ('employee','availability_link')
-        and starts_at>=(night+time '00:00') at time zone venue_tz and starts_at<((night+1)+time '00:00') at time zone venue_tz;
-    if coalesce(item->>'availability','')<>'' then
-      insert into public.staff_availability(organisation_id,venue_id,staff_id,starts_at,ends_at,availability,note,source,created_by,submitted_at,provenance)
-      values(target_organisation_id,target_venue_id,me.id,start_at,end_at,item->>'availability',nullif(left(item->>'note',300),''),'employee',auth.uid(),now(),jsonb_build_object('source','my_roster'));
-    end if;
-    saved=saved+1;
-  end loop;
-  update public.roster_proposals set status='stale' where organisation_id=target_organisation_id and venue_id=target_venue_id and status='current';
-  return jsonb_build_object('saved',saved);
-end $$;
-
 revoke execute on function public.get_my_roster(uuid,timestamptz,timestamptz) from public, anon;
-revoke execute on function public.set_my_availability(uuid,uuid,jsonb) from public, anon;
 grant execute on function public.get_my_roster(uuid,timestamptz,timestamptz) to authenticated;
-grant execute on function public.set_my_availability(uuid,uuid,jsonb) to authenticated;

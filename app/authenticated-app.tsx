@@ -13,7 +13,7 @@ import { AuthLocaleProvider, AuthLocaleSwitch } from "./auth-locale";
 import { AuthForm } from "./auth-form";
 import { CloseForm } from "./close-form";
 import { CloseWorkspace } from "./close-workspace";
-import { OnboardingForm } from "./onboarding/onboarding-form";
+import { NoAccess } from "./no-access";
 import { WorkflowForm } from "./workflow-form";
 import { AvailabilityManager } from "./availability-manager";
 import { PosImportWorkspace } from "./pos-import-workspace";
@@ -22,19 +22,12 @@ import { InventoryCountWorkspace } from "./inventory-count-workspace";
 import { ReconciliationWorkspace } from "./reconciliation-workspace";
 import { RosterBoard } from "./roster-board";
 import { MyRoster } from "./my-roster";
-import { whatsappStatus } from "../lib/whatsapp/cloud";
+import { Planner } from "./planner";
+import "./planner.css";
+import { whatsappReady } from "../lib/whatsapp/store";
 import { ServiceAutopilot } from "./service-autopilot";
 import "./real-app.css";
 
-const navigation = [
-  ["nav.today", "/app/dashboard"],
-  ["nav.sales", "/app/bookings"],
-  ["nav.planning", "/app/planning"],
-  ["nav.inventory", "/app/inventory"],
-  ["nav.suppliers", "/app/suppliers"],
-  ["nav.close", "/app/close"],
-  ["nav.settings", "/app/settings"],
-] as const;
 
 type Venue = { id: string; name: string; timezone: string };
 type Close = {
@@ -135,7 +128,7 @@ async function AuthenticatedAppContent({
     .eq("user_id", user.id)
     .eq("active", true);
   if (membershipError) throw new Error("Membership lookup failed");
-  if (!memberships?.length) return <OnboardingForm />;
+  if (!memberships?.length) return <NoAccess name={String(user.user_metadata?.full_name??"").trim().split(/\s+/)[0]||undefined} />;
   const membership = memberships[0];
   const organisationId = membership.organisation_id;
   const [{ data: organisation }, { data: venuesData }, { data: closesData }] =
@@ -159,7 +152,7 @@ async function AuthenticatedAppContent({
         .order("trading_date", { ascending: false })
         .limit(50),
     ]);
-  if (!organisation) return <OnboardingForm />;
+  if (!organisation) return <NoAccess />;
   const venues = (venuesData ?? []) as Venue[];
   const closes = (closesData ?? []) as Close[];
   const [{data:canPlanData},{data:ownProfile}]=await Promise.all([
@@ -169,12 +162,14 @@ async function AuthenticatedAppContent({
   const canPlan=Boolean(canPlanData);
   const fullAccess=["owner","administrator","manager","venue_manager","finance","bookkeeper"].includes(String(membership.role));
   const teamOnly=!fullAccess;
+  // Cliniq Team is a staff planner: planners see Planning, everyone with a profile sees their own roster.
   const navItems:readonly (readonly [AuthMessageKey,string])[]=teamOnly
     ?[["nav.myRoster","/app/my-work"],...(canPlan?[["nav.planning","/app/planning"] as const]:[])]
-    :[...navigation,...(ownProfile?[["nav.myRoster","/app/my-work"] as const]:[])];
-  const path=teamOnly&&requestedPath!=="/app/my-work"&&!(canPlan&&requestedPath==="/app/planning")?"/app/my-work":requestedPath;
+    :[["nav.planning","/app/planning"],...(ownProfile?[["nav.myRoster","/app/my-work"] as const]:[])];
+  const planningPath=requestedPath==="/app/planning"||requestedPath==="/app/planning/uitgebreid";
+  const path=teamOnly&&requestedPath!=="/app/my-work"&&!(canPlan&&planningPath)?"/app/my-work":requestedPath;
   const activeKey =
-    navItems.find(([, href]) => path === href)?.[0] ??
+    navItems.find(([, href]) => path === href || (href === "/app/planning" && path.startsWith("/app/planning/")))?.[0] ??
     (path.startsWith("/app/close/") ? "nav.nightlyClose" : "nav.command");
   const activeLabel = t(activeKey);
 
@@ -199,6 +194,8 @@ async function AuthenticatedAppContent({
   else if (path === "/app/bookings")
     content = await bookings(supabase, organisationId, venues, locale);
   else if (path === "/app/planning")
+    content = await plannerPage(supabase, organisationId, venues, String(user.user_metadata?.full_name ?? ""), user.id);
+  else if (path === "/app/planning/uitgebreid")
     content = await planning(supabase, organisationId, venues, locale);
   else if (path === "/app/my-work")
     content = await myWork(supabase, organisationId, venues, user.id, locale);
@@ -244,25 +241,28 @@ async function AuthenticatedAppContent({
             <Link
               key={href}
               href={href}
-              className={path === href ? "active" : ""}
+              className={path === href || (href === "/app/planning" && path.startsWith("/app/planning/")) ? "active" : ""}
             >
               {t(key)}
             </Link>
           ))}
         </nav>
         <div className="aside-foot">
-          <span>{t("shell.secureData")}</span>
           <p>{authEnumLabel(locale, membership.role)}</p>
+          <AuthLocaleSwitch />
+          <form action="/api/auth/logout" method="post">
+            <button className="aside-logout">{t("shell.logout")}</button>
+          </form>
         </div>
       </aside>
       <main className="app-main">
         <header className="topbar">
           <div>
             <b>{organisation.name}</b>
-            <small>
+            {venues.some((venue) => venue.name !== organisation.name) || !venues.length ? <small>
               {venues.map((venue) => venue.name).join(" · ") ||
                 t("shell.noVenue")}
-            </small>
+            </small> : null}
           </div>
           <div className="topbar-actions">
             <AuthLocaleSwitch />
@@ -272,7 +272,7 @@ async function AuthenticatedAppContent({
           </div>
         </header>
         <div className="content">
-          {path !== "/app/planning" && path !== "/app/my-work" && <section className="hero-row">
+          {!path.startsWith("/app/planning") && path !== "/app/my-work" && <section className="hero-row">
             <div>
               <div className="eyebrow">{t("shell.live")}</div>
               <h1>{activeLabel}</h1>
@@ -946,6 +946,58 @@ async function fetchAllRows<T>(page:(from:number,to:number)=>PromiseLike<{data:T
 }
 const planningWindow=()=>({from:new Date(Date.now()-183*86400000).toISOString(),to:new Date(Date.now()+400*86400000).toISOString()});
 
+/** The Cliniq planner: nights, spots, availability answers and the team. */
+async function plannerPage(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  organisationId: string,
+  venues: Venue[],
+  metadataName: string,
+  userId: string,
+) {
+  const venue = venues[0];
+  if (!venue) return <HonestEmpty title="Planning" locale="nl" />;
+  const range = planningWindow();
+  const [
+    { data: departmentData }, { data: roleData }, { data: staffData }, { data: shiftData }, { data: availabilityData },
+    { data: requestData }, { data: recipientData }, { data: qualificationData }, { data: patternData }, { data: plannerData },
+    { data: canManageMembers }, { data: me },
+  ] = await Promise.all([
+    supabase.from("departments").select("id,venue_id,name,kind").eq("organisation_id", organisationId).order("name"),
+    supabase.from("operational_roles").select("id,department_id,name,hourly_cost_minor").eq("organisation_id", organisationId).order("name"),
+    supabase.from("staff_profiles").select("id,full_name,contact_phone,preferred_language,employment_status,invitation_state,auth_user_id").eq("organisation_id", organisationId).order("full_name"),
+    fetchAllRows((from,to)=>supabase.from("shifts").select("id,venue_id,department_id,role_id,staff_id,starts_at,ends_at,status,revision,locked").eq("organisation_id", organisationId).gte("starts_at", range.from).lt("starts_at", range.to).order("starts_at").order("id").range(from,to)),
+    fetchAllRows((from,to)=>supabase.from("staff_availability").select("staff_id,venue_id,starts_at,availability,submitted_at").eq("organisation_id", organisationId).gte("starts_at", range.from).lt("starts_at", range.to).order("starts_at").order("id").range(from,to)),
+    supabase.from("availability_request_periods").select("id,venue_id,starts_at,ends_at,deadline_at,status,created_at,requested_dates").eq("organisation_id", organisationId).order("created_at", { ascending: false }).limit(40),
+    supabase.from("availability_request_recipients").select("id,request_id,staff_id,status").eq("organisation_id", organisationId).order("created_at", { ascending: false }).limit(1000),
+    supabase.from("staff_role_qualifications").select("staff_id,role_id").eq("organisation_id", organisationId),
+    supabase.from("venue_service_patterns" as "departments").select("venue_id,iso_weekday,active,lines").eq("organisation_id", organisationId),
+    supabase.from("member_capability_overrides").select("user_id").eq("organisation_id", organisationId).eq("capability", "planning.manage").eq("allowed", true),
+    supabase.rpc("has_capability", { target_organisation_id: organisationId, target_venue_id: null as unknown as string, required_capability: "members.manage" }),
+    supabase.from("staff_profiles").select("full_name,first_name").eq("organisation_id", organisationId).eq("auth_user_id", userId).maybeSingle(),
+  ]);
+  const own = me as unknown as { full_name?: string; first_name?: string | null } | null;
+  const plannerName = (own?.first_name || own?.full_name || metadataName).trim().split(/\s+/)[0] ?? "";
+  return (
+    <Planner
+      organisationId={organisationId}
+      venue={{ id: venue.id, name: venue.name, timezone: venue.timezone || "Europe/Amsterdam" }}
+      plannerName={plannerName}
+      departments={(departmentData ?? []) as unknown as { id: string; venue_id: string; name: string; kind?: "staff" | "dj" }[]}
+      roles={(roleData ?? []) as unknown as { id: string; department_id: string; name: string; hourly_cost_minor: string }[]}
+      staff={(staffData ?? []) as unknown as import("./planner").PlannerStaff[]}
+      initialShifts={(shiftData ?? []) as unknown as import("./planner").PlannerShift[]}
+      availability={(availabilityData ?? []) as unknown as { staff_id: string; venue_id: string; starts_at: string; availability: string; submitted_at: string | null }[]}
+      requests={(requestData ?? []) as unknown as { id: string; venue_id: string; starts_at: string; ends_at: string; deadline_at: string; status: string; created_at: string; requested_dates: string[] | null }[]}
+      recipients={(recipientData ?? []) as unknown as { id: string; request_id: string; staff_id: string; status: string }[]}
+      qualifications={(qualificationData ?? []) as unknown as { staff_id: string; role_id: string }[]}
+      patterns={(patternData ?? []) as unknown as { venue_id: string; iso_weekday: number; active: boolean; lines: { role_id: string; count: number; start: string; end: string; break_minutes: number }[] }[]}
+      plannerUserIds={((plannerData ?? []) as unknown as { user_id: string }[]).map((row) => row.user_id)}
+      canManageMembers={Boolean(canManageMembers)}
+      whatsappReady={await whatsappReady(organisationId)}
+    />
+  );
+}
+
 async function planning(
   supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
   organisationId: string,
@@ -1203,7 +1255,7 @@ async function planning(
       servicePatterns={servicePatterns}
       plannerUserIds={plannerUserIds}
       canManageMembers={Boolean(canManageMembers)}
-      whatsappReady={whatsappStatus().configured}
+      whatsappReady={await whatsappReady(organisationId)}
     />
   );
   /* The legacy form workspace remains below temporarily as a recovery reference,
@@ -1592,7 +1644,7 @@ async function myWork(
   const t=(key:AuthMessageKey)=>authMessage(locale,key);
   const { data: profile } = await supabase
     .from("staff_profiles")
-    .select("id,full_name")
+    .select("id,full_name,first_name")
     .eq("organisation_id", organisationId)
     .eq("auth_user_id", userId)
     .maybeSingle();
@@ -1605,287 +1657,21 @@ async function myWork(
         </div>
       </section>
     );
-  const staff = profile as unknown as { id: string; full_name: string };
-  const [
-    { data: shiftData },
-    { data: responseData },
-    { data: timeData },
-    { data: availabilityData },
-    { data: absenceData },
-    { data: swapData },
-  ] = await Promise.all([
-    supabase
-      .from("shifts")
-      .select("id,venue_id,starts_at,ends_at,break_minutes,status")
-      .eq("organisation_id", organisationId)
-      .eq("staff_id", staff.id)
-      .gte("ends_at", new Date().toISOString())
-      .order("starts_at")
-      .limit(14),
-    supabase
-      .from("shift_responses")
-      .select("shift_id,response")
-      .eq("organisation_id", organisationId)
-      .eq("staff_id", staff.id),
-    supabase
-      .from("time_records")
-      .select(
-        "id,venue_id,clocked_in_at,clocked_out_at,break_minutes,status,approved_at",
-      )
-      .eq("organisation_id", organisationId)
-      .eq("staff_id", staff.id)
-      .order("clocked_in_at", { ascending: false })
-      .limit(14),
-    supabase
-      .from("staff_availability")
-      .select("id,starts_at,ends_at,availability")
-      .eq("organisation_id", organisationId)
-      .eq("staff_id", staff.id)
-      .gte("ends_at", new Date().toISOString())
-      .order("starts_at")
-      .limit(14),
-    supabase.from("staff_absences").select("id,venue_id,starts_at,ends_at,absence_type,status,note").eq("organisation_id",organisationId).eq("staff_id",staff.id).order("starts_at",{ascending:false}).limit(20),
-    supabase.from("swap_requests").select("id,venue_id,shift_id,requester_staff_id,candidate_staff_id,state,reason,manager_reason,cost_effect_minor,created_at").eq("organisation_id",organisationId).or(`requester_staff_id.eq.${staff.id},candidate_staff_id.eq.${staff.id}`).order("created_at",{ascending:false}).limit(20),
-  ]);
-  const shifts = (shiftData ?? []) as unknown as {
-    id: string;
-    venue_id: string;
-    starts_at: string;
-    ends_at: string;
-    break_minutes: number;
-    status: string;
-  }[];
-  const responses = (responseData ?? []) as unknown as {
-    shift_id: string;
-    response: string;
-  }[];
-  const records = (timeData ?? []) as unknown as {
-    id: string;
-    venue_id: string;
-    clocked_in_at: string;
-    clocked_out_at: string | null;
-    break_minutes: number;
-    status: string;
-    approved_at: string | null;
-  }[];
-  const availability = (availabilityData ?? []) as unknown as {
-    id: string;
-    starts_at: string;
-    ends_at: string;
-    availability: string;
-  }[];
-  const ownAbsences=(absenceData??[]) as unknown as {id:string;venue_id:string;starts_at:string;ends_at:string;absence_type:string;status:string;note:string|null}[];
-  const swaps=(swapData??[]) as unknown as {id:string;venue_id:string;shift_id:string;requester_staff_id:string;candidate_staff_id:string;state:string;reason:string|null;manager_reason:string|null;cost_effect_minor:string|null;created_at:string}[];
-  const candidateResults=await Promise.all(shifts.filter(shift=>shift.status==="published").map(async shift=>{const {data}=await supabase.rpc("eligible_swap_candidates" as "clock_out",{target_organisation_id:organisationId,target_shift_id:shift.id} as never);return[shift.id,(data??[]) as unknown as {staff_id:string;full_name:string}[]] as const}));
-  const swapCandidates=new Map(candidateResults);
-  const {data:eligibleOfferData}=await supabase.rpc("eligible_open_shift_offers" as "clock_out",{target_organisation_id:organisationId} as never);
-  const eligibleOffers=(eligibleOfferData??[]) as unknown as {offer_id:string;venue_id:string;shift_id:string;starts_at:string;ends_at:string;break_minutes:number;role_name:string;closes_at:string}[];
-  const openRecord = records.find((record) => !record.clocked_out_at);
-  const next = shifts[0];
-  const rosterMonday=new Date();rosterMonday.setHours(0,0,0,0);rosterMonday.setDate(rosterMonday.getDate()-((rosterMonday.getDay()+6)%7));
-  const rosterEnd=new Date(rosterMonday.getTime()+35*86400000);
-  const myVenue=venues[0];
-  const [{data:myRosterData},{data:myAvailabilityData},{data:myPatternData}]=await Promise.all([
-    supabase.rpc("get_my_roster" as "clock_out",{target_organisation_id:organisationId,target_from:rosterMonday.toISOString(),target_to:rosterEnd.toISOString()} as never),
-    supabase.from("staff_availability").select("starts_at,availability").eq("organisation_id",organisationId).eq("staff_id",staff.id).gte("starts_at",new Date(rosterMonday.getTime()-86400000).toISOString()).lt("starts_at",rosterEnd.toISOString()).order("starts_at").order("created_at"),
-    supabase.from("venue_service_patterns" as "departments").select("venue_id,iso_weekday,active").eq("organisation_id",organisationId),
-  ]);
-  const myRoster=(myRosterData??{shifts:[]}) as unknown as {shifts:{id:string;venue_id:string;starts_at:string;ends_at:string;break_minutes:number;status:string;role_name:string;department_kind:string;colleagues:{name:string;role_name:string;starts_at:string;ends_at:string}[]}[]};
-  const openWeekdays=((myPatternData??[]) as unknown as {venue_id:string;iso_weekday:number;active:boolean}[]).filter(row=>row.active&&(!myVenue||row.venue_id===myVenue.id)).map(row=>row.iso_weekday);
+  const staff = profile as unknown as { id: string; full_name: string; first_name: string | null };
+  const venue = venues[0];
+  const from = new Date(Date.now() - 8 * 86400000), to = new Date(Date.now() + 40 * 86400000);
+  const { data } = await supabase.rpc("get_my_roster" as "clock_out", { target_organisation_id: organisationId, target_from: from.toISOString(), target_to: to.toISOString() } as never);
+  const roster = (data ?? { shifts: [], requests: [] }) as unknown as { shifts?: Parameters<typeof MyRoster>[0]["shifts"]; requests?: Parameters<typeof MyRoster>[0]["requests"] };
   return (
-    <div className="workflow-stack employee-work">
-      {myVenue?<MyRoster organisationId={organisationId} venueId={myVenue.id} venueName={myVenue.name} timezone={myVenue.timezone||"Europe/Amsterdam"} firstName={staff.full_name.trim().split(/\s+/)[0]} shifts={myRoster.shifts??[]} availability={(myAvailabilityData??[]) as unknown as {starts_at:string;availability:string}[]} openWeekdays={openWeekdays} locale={locale==="nl"?"nl":"en"}/>:null}
-      {openRecord?<p className="my-clock-state">{t("myWork.clockedIn")}</p>:null}
-      {openRecord ? (
-        <div className="workflow-stack"><WorkflowForm
-          endpoint="/api/workforce"
-          organisationId={organisationId}
-          workflow="clock_out"
-          title={t("myWork.activeShift")}
-          submitLabel={t("myWork.clockOut")}
-          fields={[
-            {name:"idempotencyKey",label:"",type:"hidden",defaultValue:crypto.randomUUID()},
-            {
-              name: "timeRecordId",
-              label: t("myWork.timeRecord"),
-              type: "select",
-              required: true,
-              options: [
-                {
-                  label: `${t("myWork.started")} ${new Date(openRecord.clocked_in_at).toLocaleTimeString(authIntlLocale(locale), { hour: "2-digit", minute: "2-digit" })}`,
-                  value: openRecord.id,
-                },
-              ],
-            },
-          ]}
-        /><div className="split-workspace"><WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="start_break" title={locale==="nl"?"Pauze":"Break"} submitLabel={locale==="nl"?"Start pauze":"Start break"} fields={[{name:"idempotencyKey",label:"",type:"hidden",defaultValue:crypto.randomUUID()},{name:"timeRecordId",label:t("myWork.timeRecord"),type:"select",required:true,options:[{label:t("myWork.activeShift"),value:openRecord.id}]}]}/><WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="end_break" title={locale==="nl"?"Lopende pauze":"Active break"} submitLabel={locale==="nl"?"Beëindig pauze":"End break"} fields={[{name:"idempotencyKey",label:"",type:"hidden",defaultValue:crypto.randomUUID()},{name:"timeRecordId",label:t("myWork.timeRecord"),type:"select",required:true,options:[{label:t("myWork.activeShift"),value:openRecord.id}]}]}/></div></div>
-      ) : next ? (
-        <WorkflowForm
-          endpoint="/api/workforce"
-          organisationId={organisationId}
-          workflow="clock_in"
-          title={t("myWork.attendance")}
-          submitLabel={t("myWork.clockIn")}
-          fields={[
-            {name:"idempotencyKey",label:"",type:"hidden",defaultValue:crypto.randomUUID()},
-            {
-              name: "venueId",
-              label: t("common.venue"),
-              type: "select",
-              required: true,
-              options: venueOptions(
-                venues.filter((v) => v.id === next.venue_id),
-              ),
-            },
-            {
-              name: "shiftId",
-              label: t("myWork.shift"),
-              type: "select",
-              required: true,
-              options: [
-                {
-                  label: new Date(next.starts_at).toLocaleString(authIntlLocale(locale)),
-                  value: next.id,
-                },
-              ],
-            },
-          ]}
-        />
-      ) : null}
-      <section className="mobile-roster" aria-label={t("myWork.upcomingSchedule")}>
-        {shifts.length ? (
-          shifts.map((shift) => (
-            <article key={shift.id}>
-              <div>
-                <b>
-                  {new Date(shift.starts_at).toLocaleDateString(authIntlLocale(locale), {
-                    weekday: "long",
-                    day: "numeric",
-                    month: "short",
-                  })}
-                </b>
-                <span>
-                  {new Date(shift.starts_at).toLocaleTimeString(authIntlLocale(locale), {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                  –
-                  {new Date(shift.ends_at).toLocaleTimeString(authIntlLocale(locale), {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}{" "}
-                  · {t("myWork.break")} {shift.break_minutes} min
-                </span>
-              </div>
-              <em>
-                {authEnumLabel(locale,responses.find((r) => r.shift_id === shift.id)?.response || shift.status)}
-              </em>
-              {!responses.some((r) => r.shift_id === shift.id) &&
-              shift.status === "published" ? (
-                <WorkflowForm
-                  endpoint="/api/workforce"
-                  organisationId={organisationId}
-                  workflow="respond"
-                  title={t("myWork.confirmShift")}
-                  submitLabel={t("myWork.saveResponse")}
-                  fields={[
-                    {
-                      name: "venueId",
-                      label: t("common.venue"),
-                      type: "select",
-                      required: true,
-                      options: [
-                        {
-                          label:
-                            venues.find((v) => v.id === shift.venue_id)?.name ||
-                            t("common.venue"),
-                          value: shift.venue_id,
-                        },
-                      ],
-                    },
-                    {
-                      name: "shiftId",
-                      label: t("myWork.shift"),
-                      type: "select",
-                      required: true,
-                      options: [
-                        {
-                          label: new Date(shift.starts_at).toLocaleString(
-                            authIntlLocale(locale),
-                          ),
-                          value: shift.id,
-                        },
-                      ],
-                    },
-                    {
-                      name: "staffId",
-                      label: t("planning.employee"),
-                      type: "select",
-                      required: true,
-                      options: [{ label: staff.full_name, value: staff.id }],
-                    },
-                    {
-                      name: "response",
-                      label: t("myWork.response"),
-                      type: "select",
-                      required: true,
-                      options: [
-                        { label: t("myWork.accept"), value: "accepted" },
-                        { label: t("myWork.reject"), value: "rejected" },
-                      ],
-                    },
-                    { name: "reason", label: t("myWork.rejectReason") },
-                  ]}
-                />
-              ) : null}
-            </article>
-          ))
-        ) : (
-          <div className="empty-state">
-            <p>{t("myWork.noShifts")}</p>
-          </div>
-        )}
-      </section>
-      {shifts.filter(shift=>(swapCandidates.get(shift.id)?.length??0)>0).map(shift=><WorkflowForm key={`swap-${shift.id}`} endpoint="/api/workforce" organisationId={organisationId} workflow="request_swap" title={locale==="nl"?`Ruil dienst ${new Date(shift.starts_at).toLocaleString("nl-NL")}`:`Swap shift ${new Date(shift.starts_at).toLocaleString("en-GB")}`} submitLabel={locale==="nl"?"Ruil voorstellen":"Propose swap"} fields={[{name:"shiftId",label:"",type:"hidden",defaultValue:shift.id},{name:"candidateStaffId",label:locale==="nl"?"Geschikte collega":"Eligible colleague",type:"select",required:true,options:(swapCandidates.get(shift.id)??[]).map(candidate=>({label:candidate.full_name,value:candidate.staff_id}))},{name:"reason",label:locale==="nl"?"Reden":"Reason",type:"textarea",required:true},{name:"idempotencyKey",label:"",type:"hidden",defaultValue:crypto.randomUUID()}]}/>)}
-      {swaps.filter(swap=>swap.candidate_staff_id===staff.id&&swap.state==="requested").map(swap=><section className="panel" key={swap.id}><h3>{locale==="nl"?"Ruilverzoek van collega":"Colleague swap request"}</h3><p>{swap.reason}</p><div className="split-workspace"><WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="respond_swap" title={locale==="nl"?"Instemmen":"Accept"} submitLabel={locale==="nl"?"Instemmen":"Accept"} fields={[{name:"swapId",label:"",type:"hidden",defaultValue:swap.id},{name:"decision",label:"",type:"hidden",defaultValue:"accept"}]}/><WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="respond_swap" title={locale==="nl"?"Afwijzen":"Decline"} submitLabel={locale==="nl"?"Afwijzen":"Decline"} fields={[{name:"swapId",label:"",type:"hidden",defaultValue:swap.id},{name:"decision",label:"",type:"hidden",defaultValue:"decline"}]}/></div></section>)}
-      {swaps.length?<RecordPanel title={locale==="nl"?"Mijn ruilverzoeken":"My swap requests"} empty="">{swaps.map(swap=><div className="record-row" key={swap.id}><b>{authEnumLabel(locale,swap.state)}</b><span>{swap.reason??"—"}</span><em>{swap.manager_reason??""}</em></div>)}</RecordPanel>:null}
-      {eligibleOffers.length?<RecordPanel title={locale==="nl"?"Geschikte open diensten":"Eligible open shifts"} empty="">{eligibleOffers.map(offer=><div className="record-row" key={offer.offer_id}><b>{offer.role_name} · {new Date(offer.starts_at).toLocaleString(authIntlLocale(locale))}</b><span>{locale==="nl"?"Je beschikbaarheid, kwalificatie, rust en uren zijn vooraf gecontroleerd.":"Your availability, qualification, rest and hours were pre-checked."}</span><WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="claim_open_shift" title={locale==="nl"?"Open dienst accepteren":"Accept open shift"} submitLabel={locale==="nl"?"Atomair accepteren":"Accept atomically"} fields={[{name:"offerId",label:"",type:"hidden",defaultValue:offer.offer_id},{name:"idempotencyKey",label:"",type:"hidden",defaultValue:crypto.randomUUID()}]}/></div>)}</RecordPanel>:null}
-      <div className="split-workspace">
-        <WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="request_leave" title={locale==="nl"?"Vrij vragen":"Request leave"} submitLabel={locale==="nl"?"Aanvraag indienen":"Submit request"} fields={[{name:"venueId",label:t("common.venue"),type:"select",required:true,options:venueOptions(venues)},{name:"startsAt",label:locale==="nl"?"Vanaf":"From",type:"datetime-local",required:true},{name:"endsAt",label:locale==="nl"?"Tot":"Until",type:"datetime-local",required:true},{name:"note",label:locale==="nl"?"Notitie (optioneel)":"Note (optional)",type:"textarea"}]}/>
-        <WorkflowForm endpoint="/api/workforce" organisationId={organisationId} workflow="report_sickness" title={locale==="nl"?"Ziek melden":"Report sickness"} submitLabel={locale==="nl"?"Veilig melden":"Report securely"} fields={[{name:"venueId",label:t("common.venue"),type:"select",required:true,options:venueOptions(venues)},{name:"startsAt",label:locale==="nl"?"Vanaf":"From",type:"datetime-local",required:true},{name:"endsAt",label:locale==="nl"?"Geschat tot":"Expected until",type:"datetime-local",required:true},{name:"note",label:locale==="nl"?"Korte operationele notitie":"Short operational note",type:"textarea"}]}/>
-      </div><RecordPanel title={locale==="nl"?"Aanvragen":"Requests"} empty={locale==="nl"?"Er zijn nog geen vrije dagen of ziekmeldingen.":"No leave or sickness requests."}>{ownAbsences.map(row=><div className="record-row" key={row.id}><b>{authEnumLabel(locale,row.absence_type)}</b><span>{date(row.starts_at,locale)}–{date(row.ends_at,locale)}</span><em>{authEnumLabel(locale,row.status)}</em></div>)}</RecordPanel>
-      <div className="split-workspace">
-        <RecordPanel
-          title={t("myWork.availability")}
-          empty={t("myWork.noAvailability")}
-        >
-          {availability.map((row) => (
-            <div className="record-row" key={row.id}>
-              <b>{authEnumLabel(locale,row.availability)}</b>
-              <span>{new Date(row.starts_at).toLocaleString(authIntlLocale(locale))}</span>
-              <em>
-                {t("myWork.until")}{" "}
-                {new Date(row.ends_at).toLocaleTimeString(authIntlLocale(locale), {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}
-              </em>
-            </div>
-          ))}
-        </RecordPanel>
-        <RecordPanel title={t("myWork.submittedHours")} empty={t("myWork.noHours")}>
-          {records.map((row) => (
-            <div className="record-row" key={row.id}>
-              <b>{date(row.clocked_in_at,locale)}</b>
-              <span>
-                {authEnumLabel(locale,row.status)} · {t("myWork.break")} {row.break_minutes} min
-              </span>
-              <em>{row.approved_at ? t("myWork.approved") : t("myWork.pending")}</em>
-            </div>
-          ))}
-        </RecordPanel>
-      </div>
-    </div>
+    <MyRoster
+      organisationId={organisationId}
+      venueName={venue?.name ?? "Cliniq"}
+      timezone={venue?.timezone || "Europe/Amsterdam"}
+      firstName={staff.first_name || staff.full_name.trim().split(/\s+/)[0]}
+      shifts={roster.shifts ?? []}
+      requests={(roster.requests ?? []).filter((request) => !venue || request.venue_id === venue.id)}
+      locale={locale === "nl" ? "nl" : "en"}
+    />
   );
 }
 

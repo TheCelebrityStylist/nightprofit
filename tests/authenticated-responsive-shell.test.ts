@@ -18,7 +18,7 @@ describe("authenticated responsive shell", () => {
   it("renders semantic links for every authenticated navigation destination", () => {
     expect(shell).toContain('<nav aria-label="NightProfit">');
     expect(shell).toContain("<Link");
-    expect(shell).toContain('className={path === href ? "active" : ""}');
+    expect(shell).toContain('className={path === href || (href === "/app/planning" && path.startsWith("/app/planning/")) ? "active" : ""}');
   });
 
   it("gives authenticated navigation links accessible touch targets", () => {

@@ -7,5 +7,8 @@ export function hashStaffOnboardingToken(token:string){
   return createHash("sha256").update(token,"utf8").digest("hex");
 }
 export function onboardingMessage(language:"nl"|"en",name:string,organisationName:string,link:string){
-  return language==="nl"?`Hoi ${name}, ${organisationName} nodigt je uit voor NightProfit. Rond je beveiligde personeelsprofiel af via ${link}`:`Hi ${name}, ${organisationName} invited you to NightProfit. Complete your secure employee profile at ${link}`;
+  return language==="nl"
+    ?`Hoi ${name}! Je staat in het team van ${organisationName}. Maak hier je account aan, dan zie je je rooster en geef je door wanneer je kunt: ${link}`
+    :`Hi ${name}! You're on the ${organisationName} team. Create your account here to see your roster and tell us when you can work: ${link}`;
 }
+

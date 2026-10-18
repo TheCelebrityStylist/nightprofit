@@ -23,6 +23,8 @@ const env = (name: string) => {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 };
 
+export const DEFAULT_TEMPLATES: Record<WhatsappTemplateKey, string> = { roster: "rooster_gepubliceerd", availability: "beschikbaarheid_opvragen", invite: "team_uitnodiging" };
+
 export const WHATSAPP_REQUIRED_SECRETS = ["WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID"] as const;
 
 export function whatsappConfig(): WhatsappConfig | null {
@@ -35,9 +37,9 @@ export function whatsappConfig(): WhatsappConfig | null {
     graphVersion: env("WHATSAPP_GRAPH_VERSION") ?? "v23.0",
     language: env("WHATSAPP_TEMPLATE_LANGUAGE") ?? "nl",
     templates: {
-      roster: env("WHATSAPP_TEMPLATE_ROSTER") ?? "rooster_gepubliceerd",
-      availability: env("WHATSAPP_TEMPLATE_AVAILABILITY") ?? "beschikbaarheid_opvragen",
-      invite: env("WHATSAPP_TEMPLATE_INVITE") ?? "team_uitnodiging",
+      roster: env("WHATSAPP_TEMPLATE_ROSTER") ?? DEFAULT_TEMPLATES.roster,
+      availability: env("WHATSAPP_TEMPLATE_AVAILABILITY") ?? DEFAULT_TEMPLATES.availability,
+      invite: env("WHATSAPP_TEMPLATE_INVITE") ?? DEFAULT_TEMPLATES.invite,
     },
   };
 }
