@@ -63,3 +63,7 @@ select public.plan_add_open_shift(:'org',:'venue',:'role',(select starts_at from
 select public.reissue_staff_invitation(:'org',:'sam',repeat('e',64),now()+interval '14 days')->>'invitation_id' is not null as reinvited;
 select count(*) filter (where revoked_at is null) as live_invites, count(*) as all_invites from public.staff_onboarding_invitations where staff_id=:'sam';
 select has_function_privilege('authenticated','public.create_organisation(text,text)','execute') as self_signup_can_create_org;
+-- changing an answer overwrites the night instead of adding a second row
+select set_config('request.jwt.claim.sub','00000000-0000-0000-0000-00000000000c',false);
+select public.set_my_availability(:'org',:'req',jsonb_build_array(jsonb_build_object('date',:'thu','availability','available'),jsonb_build_object('date',(:'thu'::date+1)::text,'availability','unavailable')))->>'state' as noor_complete_state;
+select count(*) as noor_rows from public.staff_availability a join public.availability_request_recipients r on r.id=a.request_recipient_id where r.staff_id=:'noor';

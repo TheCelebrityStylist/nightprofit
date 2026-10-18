@@ -37,7 +37,7 @@ describe("personal and invitation-only", () => {
   it("closes self sign-up", () => {
     expect(read("../app/api/auth/signup/route.ts")).toContain("INVITE_ONLY");
     expect(read("../app/api/onboarding/route.ts")).toContain("INVITE_ONLY");
-    expect(read("../supabase/migrations/20260729003400_night_requests_and_slot_planning.sql")).toContain("revoke execute on function public.create_organisation(text,text) from public,anon,authenticated;");
+    expect(read("../supabase/migrations/20260729003500_invitation_only_organisations.sql")).toContain("revoke execute on function public.create_organisation(text,text) from public,anon,authenticated;");
   });
   it("only accepts answers for nights the planner asked about", () => {
     const sql = read("../supabase/migrations/20260729003400_night_requests_and_slot_planning.sql");

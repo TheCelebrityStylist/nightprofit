@@ -32,7 +32,7 @@ begin
   return result;
 end $$;
 
--- Shared by the WhatsApp link and "Mijn rooster": replaces this person's answers for the request.
+-- Shared by the WhatsApp link and "Mijn rooster": records this person's answers for the request, one per night.
 create or replace function public.apply_availability_answers(
   target_recipient_id uuid, target_entries jsonb, target_source text
 ) returns jsonb
@@ -60,17 +60,23 @@ begin
   end loop;
   if exists(select 1 from jsonb_array_elements(target_entries) as e(value) group by e.value->>'date' having count(*)>1) then raise exception 'duplicate_night'; end if;
 
-  delete from public.staff_availability where request_recipient_id=recipient.id;
+  -- One row per requested night: overwrite the earlier answer for that night, or add it.
   for item in select value from jsonb_array_elements(target_entries) loop
     night=(item->>'date')::date;
-    insert into public.staff_availability(organisation_id,venue_id,staff_id,starts_at,ends_at,availability,note,source,created_by,request_recipient_id,submitted_at,provenance)
-    values(recipient.organisation_id,recipient.venue_id,recipient.staff_id,
-      (night+time '18:00') at time zone venue_tz,((night+1)+time '05:00') at time zone venue_tz,
-      item->>'availability',nullif(left(coalesce(item->>'note',''),300),''),target_source,
-      coalesce(auth.uid(),period.created_by),recipient.id,now(),jsonb_build_object('source',target_source,'night',night));
+    update public.staff_availability
+      set availability=item->>'availability',note=nullif(left(coalesce(item->>'note',''),300),''),source=target_source,
+          submitted_at=now(),provenance=jsonb_build_object('source',target_source,'night',night)
+      where request_recipient_id=recipient.id and starts_at=(night+time '18:00') at time zone venue_tz;
+    if not found then
+      insert into public.staff_availability(organisation_id,venue_id,staff_id,starts_at,ends_at,availability,note,source,created_by,request_recipient_id,submitted_at,provenance)
+      values(recipient.organisation_id,recipient.venue_id,recipient.staff_id,
+        (night+time '18:00') at time zone venue_tz,((night+1)+time '05:00') at time zone venue_tz,
+        item->>'availability',nullif(left(coalesce(item->>'note',''),300),''),target_source,
+        coalesce(auth.uid(),period.created_by),recipient.id,now(),jsonb_build_object('source',target_source,'night',night));
+    end if;
   end loop;
 
-  answered=jsonb_array_length(target_entries);
+  select count(*) into answered from public.staff_availability where request_recipient_id=recipient.id;
   total=coalesce(cardinality(period.requested_dates),answered);
   next_status=case when answered>0 and answered>=total then 'submitted' when answered>0 then 'partial' else 'opened' end;
   update public.availability_request_recipients
@@ -332,5 +338,3 @@ grant execute on function public.plan_add_open_shift(uuid,uuid,uuid,timestamptz,
 grant execute on function public.plan_remove_open_shifts(uuid,uuid,uuid[]) to authenticated;
 grant execute on function public.reissue_staff_invitation(uuid,uuid,text,timestamptz) to authenticated;
 
--- Invitation only: a signed-in user without an invitation can no longer create their own organisation.
-revoke execute on function public.create_organisation(text,text) from public,anon,authenticated;
