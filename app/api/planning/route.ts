@@ -29,7 +29,7 @@ const templateSaveSchema=z.object({venueId:z.string().uuid(),name:z.string().tri
 const templateApplySchema=z.object({venueId:z.string().uuid(),templateId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),repeatCount:z.coerce.number().int().min(1).max(52),idempotencyKey:z.string().uuid()});
 const breakPlanSchema=z.object({venueId:z.string().uuid(),shiftId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true})});
 const copyWeekSchema=z.object({venueId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),idempotencyKey:z.string().uuid()});
-const staffSchema=z.object({venueId:z.string().uuid(),departmentId:z.string().uuid(),roleId:z.string().uuid(),fullName:z.string().trim().min(2).max(140),email:z.union([z.literal(""),z.email()]),phone:z.string().trim().min(8).max(40),accessRole:z.literal("employee"),engagementType:z.enum(["employee","contractor","temporary"]),preferredLanguage:z.enum(["nl","en"])});
+const staffSchema=z.object({venueId:z.string().uuid(),departmentId:z.string().uuid(),roleId:z.string().uuid(),fullName:z.string().trim().min(2).max(140),email:z.union([z.literal(""),z.email()]),phone:z.union([z.literal(""),z.string().trim().min(8).max(40)]).default(""),accessRole:z.literal("employee"),engagementType:z.enum(["employee","contractor","temporary"]),preferredLanguage:z.enum(["nl","en"])});
 const staffDeactivateSchema=z.object({staffId:z.string().uuid()});
 const invitationStateSchema=z.object({venueId:z.string().uuid(),invitationId:z.string().uuid(),state:z.enum(["opened_in_whatsapp","copied"])});
 const absenceSchema=z.object({venueId:z.string().uuid(),staffId:z.string().uuid(),startsAt:z.iso.datetime({local:true}),endsAt:z.iso.datetime({local:true}),absenceType:z.enum(["leave","sickness","other"]),note:z.string().trim().max(500)});
@@ -174,7 +174,7 @@ export async function POST(request:Request){
     if(input.action==="staff"){
       const values=staffSchema.parse(input.values);
       const {supabase,user}=await requireMembership(input.organisationId,"members.manage",values.venueId);
-      const phone=values.phone?normalizeDutchPhone(values.phone):null;
+      let phone:string|null=null;if(values.phone){try{phone=normalizeDutchPhone(values.phone)}catch{return NextResponse.json({errorCode:"INVALID_PHONE"},{status:400})}}
       const email=values.email.toLowerCase()||null;
       const duplicateQueries=[
         email?supabase.from("staff_profiles").select("id").eq("organisation_id",input.organisationId).ilike("contact_email",email).limit(1):Promise.resolve({data:[],error:null}),
@@ -189,9 +189,9 @@ export async function POST(request:Request){
       const rawToken=createStaffOnboardingToken(),tokenHash=hashStaffOnboardingToken(rawToken),link=`${new URL(request.url).origin}/employee-onboarding/${rawToken}`;
       const {data,error}=await supabase.rpc("create_invited_staff" as "clock_out",{target_organisation_id:input.organisationId,target_venue_id:values.venueId,target_department_id:values.departmentId,target_role_id:values.roleId,target_full_name:values.fullName,target_email:email??"",target_phone:phone,target_language:values.preferredLanguage,target_engagement_type:values.engagementType,target_token_hash:tokenHash,target_expires_at:new Date(Date.now()+7*86400000).toISOString()} as never);if(error||!data)throw error??new Error("STAFF_CREATE_FAILED");
       const created=data as unknown as {staff_id:string;invitation_id:string},staffId=created.staff_id;
-      const invitationMessage=onboardingMessage(values.preferredLanguage,values.fullName,String(organisation.name),link),whatsappUrl=`https://wa.me/${phone!.replace("+","")}?text=${encodeURIComponent(invitationMessage)}`;
+      const invitationMessage=onboardingMessage(values.preferredLanguage,values.fullName,String(organisation.name),link),whatsappUrl=phone?`https://wa.me/${phone.replace("+","")}?text=${encodeURIComponent(invitationMessage)}`:"";
       await supabase.from("audit_logs").insert({organisation_id:input.organisationId,venue_id:values.venueId,actor_id:user.id,action:"staff.created",entity_type:"staff_profile",entity_id:staffId,after_summary:{engagement_type:values.engagementType,role_name:String(role.name),delivery_state:"prepared"},correlation_id:crypto.randomUUID(),source:"planning_api"});
-      return NextResponse.json({message:"Medewerker en beveiligde onboardinguitnodiging opgeslagen.",invitation:{id:created.invitation_id,link,message:invitationMessage,whatsappUrl,deliveryState:"prepared",providerConnected:false}},{status:201});
+      return NextResponse.json({message:"Medewerker en beveiligde onboardinguitnodiging opgeslagen.",staffId,invitation:{id:created.invitation_id,link,message:invitationMessage,whatsappUrl,deliveryState:"prepared",providerConnected:false}},{status:201});
     }
     if(input.action==="invitation_state"){
       const values=invitationStateSchema.parse(input.values);const {supabase}=await requireMembership(input.organisationId,"members.manage",values.venueId);

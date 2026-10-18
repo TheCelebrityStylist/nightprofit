@@ -11,6 +11,7 @@ import { planReplacementSegments } from "@/lib/workforce/replacement-planner";
 import { normalizeDutchPhone } from "@/lib/workforce/domain";
 import { isoWeekday, patternHeadcount, type LaneKind, type ServicePattern } from "@/lib/workforce/service-nights";
 import { ServiceNightsPanel } from "./service-nights";
+import { AddPersonPanel } from "./add-person";
 
 type Venue = { id: string; name: string; timezone: string };
 type Department = { id: string; venue_id: string; name: string; kind?: LaneKind };
@@ -115,6 +116,8 @@ const isoWeek = (value: Date) => {
   date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));
   return Math.ceil(((date.getTime() - Date.UTC(date.getUTCFullYear(), 0, 1)) / dayMs + 1) / 7);
 };
+/** "Sanne de Vries" → "SV", "Milan" → "MI". */
+const initials=(name:string)=>{const parts=name.trim().split(/\s+/).filter(Boolean);return (parts.length>1?parts[0][0]+parts[parts.length-1][0]:name.trim().slice(0,2)).toUpperCase()};
 const phoneState=(value:string|null|undefined):"valid"|"missing"|"invalid"=>{if(!value)return "missing";try{normalizeDutchPhone(value);return "valid"}catch{return "invalid"}};
 
 export function RosterBoard({
@@ -140,6 +143,7 @@ export function RosterBoard({
   servicePatterns = [],
   plannerUserIds = [],
   canManageMembers = false,
+  whatsappReady = false,
 }: {
   organisationId: string;
   venues: Venue[];
@@ -163,6 +167,7 @@ export function RosterBoard({
   servicePatterns?: ServicePattern[];
   plannerUserIds?: string[];
   canManageMembers?: boolean;
+  whatsappReady?: boolean;
 }) {
   const { locale } = useAuthLocale(),
     router = useRouter();
@@ -181,11 +186,12 @@ export function RosterBoard({
   const [templateId,setTemplateId]=useState("");
   const [templateRepeats,setTemplateRepeats]=useState(1);
   useEffect(()=>{const handle=window.setTimeout(()=>setShifts(initialShifts),0);return()=>window.clearTimeout(handle)},[initialShifts]);
-  const [panel, setPanel] = useState<"shift" | "new" | "team" | "absence" | "availability" | "missed" | "health" | "scenario" | "publish" | "templates" | "share" | "nights" | null>(
+  const [panel, setPanel] = useState<"shift" | "new" | "team" | "absence" | "availability" | "missed" | "health" | "scenario" | "publish" | "templates" | "share" | "nights" | "person" | null>(
     null,
   );
   const [tab, setTab] = useState<"roster" | "actions" | "insights" | "hours">("roster");
   const [mobileDay, setMobileDay] = useState<number | null>(null);
+  const [rosterDeliveries, setRosterDeliveries] = useState<Record<string, { state: string; detail: string }>>({});
   const [nowMs] = useState(() => Date.now());
   const [newShift, setNewShift] = useState<{
     day: Date;
@@ -521,7 +527,8 @@ export function RosterBoard({
         <div className="planner-head-actions">
           {teamReady||allVenueDepartments.length?<button type="button" onClick={() => setPanel("nights")}>{tx("Avonden", "Nights")}</button>:null}
           {teamReady?<button type="button" onClick={() => setPanel("availability")}>{hasDjLane&&activeLane==="dj"?tx("DJ's vragen", "Ask DJs"):tx("Beschikbaarheid opvragen", "Request availability")}</button>:null}
-          {weekState==="setup"?<button type="button" className="primary" onClick={()=>setPanel("team")}>{tx("Team instellen","Set up team")}</button>
+          {allVenueDepartments.length&&roles.length?<button type="button" onClick={()=>setPanel("person")}>{tx("+ Persoon","+ Person")}</button>:null}
+          {weekState==="setup"?<button type="button" className="primary" onClick={()=>setPanel(allVenueDepartments.length&&roles.length?"person":"team")}>{allVenueDepartments.length&&roles.length?tx("Eerste persoon toevoegen","Add first person"):tx("Team instellen","Set up team")}</button>
           :weekState==="empty"&&standardWeekReady&&standardMissing?<button type="button" className="primary" disabled={busy} onClick={()=>void applyStandardWeek()}>{tx(`Standaardweek invullen (${standardMissing})`,`Fill standard week (${standardMissing})`)}</button>
           :weekState==="empty"?(previousWeekCount?<button type="button" className="primary" disabled={busy} onClick={() => void mutate("copy_week", {venueId,startsAt:new Date(weekStart.getTime()-7*dayMs).toISOString(),endsAt:weekStart.toISOString(),idempotencyKey:crypto.randomUUID()})}>{tx(`Kopieer vorige week (${previousWeekCount})`,`Copy last week (${previousWeekCount})`)}</button>
             :visibleIntervals.length?<button type="button" className="primary" disabled={busy} onClick={()=>void mutate("proposal",{venueId,startsAt:weekStart.toISOString(),endsAt:weekEnd.toISOString()})}>{tx("Rooster voorstellen","Suggest roster")}</button>
@@ -757,7 +764,7 @@ export function RosterBoard({
               <div className="roster-grid roster-row" style={gridStyle} key={`${department.id}-${person.id}`}>
                 <div className="employee-cell">
                   <span className="avatar">
-                    {person.id === "open" ? "+" : person.full_name.slice(0, 2).toUpperCase()}
+                    {person.id === "open" ? "+" : initials(person.full_name)}
                   </span>
                   <div>
                     <b>{person.full_name}</b>
@@ -903,6 +910,17 @@ export function RosterBoard({
                 locale={locale === "nl" ? "nl" : "en"}
                 onSaved={(text) => { setMessage(text); setPanel(null); router.refresh(); }}
               />
+            ) : panel === "person" ? (
+              <AddPersonPanel
+                organisationId={organisationId}
+                venueId={venueId}
+                roles={roles.filter((role) => allVenueDepartments.some((department) => department.id === role.department_id)).map((role) => ({ id: role.id, name: role.name, department_id: role.department_id, lane: laneOfRole(role.id) }))}
+                defaultLane={activeLane}
+                whatsappReady={whatsappReady}
+                locale={locale === "nl" ? "nl" : "en"}
+                onDone={(text) => { setMessage(text); router.refresh(); }}
+                onClose={() => setPanel(null)}
+              />
             ) : panel === "templates" ? (
               <section className="context-detail"><span className="eyebrow">{tx("TEMPLATES","TEMPLATES")}</span><h3>{tx("Vaste weken hergebruiken","Reuse standard weeks")}</h3><p>{tx("Selecteer diensten in het rooster (Ctrl/Cmd + klik) om ze als template op te slaan, of pas een template toe op deze week.","Select shifts in the roster (Ctrl/Cmd + click) to save them as a template, or apply a template to this week.")}</p>
       <section className="planner-template-bar in-panel" aria-label={tx("Roostertemplates en herhaling","Roster templates and recurrence")}>
@@ -914,8 +932,9 @@ export function RosterBoard({
       </section>
               </section>
             ) : panel === "share" ? (
-              <section className="context-detail share-roster"><span className="eyebrow">{tx("ROOSTER DELEN","SHARE ROSTER")}</span><h3>{tx("Stuur iedereen zijn diensten","Send everyone their shifts")}</h3><p>{tx("Eén tik per medewerker opent WhatsApp met zijn eigen diensten van deze week. Alleen gepubliceerde diensten.","One tap per employee opens WhatsApp with their own shifts for this week. Published shifts only.")}</p>
-                {shareRows.length?<ul>{shareRows.map(({person,rows,text,phone,minutes})=><li key={person.id}><div><b>{person.full_name}</b><small>{rows.length} {rows.length===1?tx("dienst","shift"):tx("diensten","shifts")} · {Math.round(minutes/6)/10} {tx("uur","h")}</small></div><div className="share-actions">{phone?<a className="primary" href={`https://wa.me/${phone}?text=${encodeURIComponent(text)}`} target="_blank" rel="noreferrer">WhatsApp</a>:<small>{tx("Geen geldig 06-nummer","No valid mobile number")}</small>}<button type="button" onClick={()=>{void navigator.clipboard.writeText(text);setMessage(tx(`Bericht voor ${person.full_name} gekopieerd.`,`Message for ${person.full_name} copied.`))}}>{tx("Kopieer","Copy")}</button></div></li>)}</ul>:<p className="quiet">{tx("Nog geen gepubliceerde diensten deze week.","No published shifts this week yet.")}</p>}
+              <section className="context-detail share-roster"><span className="eyebrow">{tx("ROOSTER DELEN","SHARE ROSTER")}</span><h3>{tx("Stuur iedereen zijn diensten","Send everyone their shifts")}</h3><p>{whatsappReady?tx("Iedereen krijgt zijn eigen diensten van deze week van het Cliniq-nummer. Alleen gepubliceerde diensten. Wie al hetzelfde rooster kreeg, wordt overgeslagen.","Everyone gets their own shifts for this week from the venue number. Published shifts only. People who already got the same roster are skipped."):tx("Eén tik per medewerker opent WhatsApp met zijn eigen diensten van deze week. Alleen gepubliceerde diensten.","One tap per employee opens WhatsApp with their own shifts for this week. Published shifts only.")}</p>
+                {whatsappReady&&shareRows.length?<button type="button" className="primary send-all" disabled={busy} onClick={async()=>{setBusy(true);setMessage("");try{const response=await fetch("/api/whatsapp/send",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"roster",organisationId,venueId,weekStart:weekStart.toISOString(),staffIds:shareRows.map(row=>row.person.id)})});const result=await response.json() as {deliveries?:{staffId:string;state:string;detail:string}[];message?:string;errorCode?:string};if(!response.ok)throw new Error(result.errorCode==="WHATSAPP_NOT_CONFIGURED"?tx("WhatsApp is nog niet gekoppeld.","WhatsApp is not connected yet."):tx("Versturen mislukt.","Sending failed."));setRosterDeliveries(Object.fromEntries((result.deliveries??[]).map(row=>[row.staffId,{state:row.state,detail:row.detail}])));setMessage(result.message??"")}catch(error){setMessage(error instanceof Error?error.message:tx("Versturen mislukt.","Sending failed."))}finally{setBusy(false)}}}>{tx(`Verstuur via WhatsApp (${shareRows.filter(row=>row.phone).length})`,`Send via WhatsApp (${shareRows.filter(row=>row.phone).length})`)}</button>:null}
+                {shareRows.length?<ul>{shareRows.map(({person,rows,text,phone,minutes})=><li key={person.id}><div><b>{person.full_name}</b><small>{rows.length} {rows.length===1?tx("dienst","shift"):tx("diensten","shifts")} · {Math.round(minutes/6)/10} {tx("uur","h")}</small></div><div className="share-actions">{rosterDeliveries[person.id]?<em className={`delivery-${rosterDeliveries[person.id].state}`}>{rosterDeliveries[person.id].state==="sent"?tx("Verstuurd","Sent"):rosterDeliveries[person.id].detail}</em>:null}{phone&&rosterDeliveries[person.id]?.state!=="sent"?<a className={whatsappReady?"":"primary"} href={`https://wa.me/${phone}?text=${encodeURIComponent(text)}`} target="_blank" rel="noreferrer">{whatsappReady?tx("Zelf openen","Open myself"):"WhatsApp"}</a>:phone?null:<small>{tx("Geen geldig 06-nummer","No valid mobile number")}</small>}<button type="button" onClick={()=>{void navigator.clipboard.writeText(text);setMessage(tx(`Bericht voor ${person.full_name} gekopieerd.`,`Message for ${person.full_name} copied.`))}}>{tx("Kopieer","Copy")}</button></div></li>)}</ul>:<p className="quiet">{tx("Nog geen gepubliceerde diensten deze week.","No published shifts this week yet.")}</p>}
               </section>
             ) : panel === "health" ? (
               <section className="context-detail"><span className="eyebrow">{tx("ROOSTERSTATUS", "ROSTER STATUS")}</span><h3>{health.issues.length ? tx("Aandacht nodig", "Needs attention") : tx("Rooster in orde", "Roster clear")}</h3>{health.issues.length?<ul>{health.issues.map(issue=><li key={issue.code}><b>{({coverage:tx("Dekking","Coverage"),compliance:tx("Regels","Rules"),availability:tx("Beschikbaarheid","Availability"),skills:tx("Rollen en vaardigheden","Roles and skills"),budget:tx("Budget","Budget"),hours:tx("Uren","Hours"),preference:tx("Voorkeuren","Preferences"),breaks:tx("Pauzes","Breaks"),evidence:tx("Ontbrekende informatie","Missing information")}[issue.dimension]??issue.dimension)}</b><span>{issue.count} · {issue.severity=== "blocking"?tx("blokkeert publicatie","blocks publication"):tx("controleren","review")}</span><small>{issueLabel(issue.code)}</small></li>)}</ul>:<p>{tx("Er zijn geen bekende blokkades voor deze week.","There are no known blockers for this week.")}</p>}</section>
@@ -934,6 +953,7 @@ export function RosterBoard({
                   phoneState: phoneState(row.contact_phone),
                   preferredLanguage: row.preferred_language === "en" ? "en" : "nl",
                 }))}
+                whatsappReady={whatsappReady}
               />
             ) : panel === "shift" && selected && selectedReplacementException && selectedReplacementPlan ? (
               <ReplacementPanel
@@ -1428,7 +1448,7 @@ function TeamSetup({
           </label>
           <label>
             {tx("Uurkosten (€)", "Hourly cost (€)")}
-            <input name="hourlyCost" defaultValue="18.50" required />
+            <input name="hourlyCost" inputMode="decimal" placeholder="bijv. 15,50" required />
           </label>
           <input type="hidden" name="minimumStaff" value="1" />
           <input type="hidden" name="guestsPerStaff" value="30" />
@@ -1489,7 +1509,7 @@ function TeamSetup({
       <div className="team-list">
         {staff.map((person) => (
           <div key={person.id}>
-            <span className="avatar">{person.full_name.slice(0, 2).toUpperCase()}</span>
+            <span className="avatar">{initials(person.full_name)}</span>
             <div>
               <b>{person.full_name}</b>
               <small>{person.role_name} · {person.invitation_state==="accepted"?tx("actief","active"):person.invitation_state==="pending"?tx("uitgenodigd","invited"):tx("profiel onvolledig","profile incomplete")}</small>
@@ -1634,7 +1654,7 @@ function QuickAssign({ row, candidates, busy, locale, label, timeLabel, assign }
         {visible.map(({ person, state, busyThatNight, absent, minutes, current }) => (
           <li key={person.id}>
             <button type="button" className={current ? "current" : ""} disabled={busy || current} onClick={() => assign(person.id)}>
-              <span className="avatar">{person.full_name.slice(0, 2).toUpperCase()}</span>
+              <span className="avatar">{initials(person.full_name)}</span>
               <span className="who"><b>{person.full_name}</b><small>{Math.round(minutes / 6) / 10} {tx("u deze week", "h this week")}{person.contracted_minutes_week ? ` / ${Math.round(person.contracted_minutes_week / 60)}` : ""}</small></span>
               <em className={`avail-chip ${current ? "preferred" : busyThatNight || absent ? "unavailable" : state}`}>{current ? tx("Ingepland", "Assigned") : absent ? tx("Afwezig", "Absent") : busyThatNight ? tx("Werkt al", "Already working") : state === "unknown" ? tx("Onbekend", "Unknown") : label(state)}</em>
             </button>

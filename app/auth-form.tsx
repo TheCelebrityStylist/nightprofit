@@ -45,7 +45,7 @@ function LocalizedAuthForm({ mode,initialError }: { mode:"login"|"signup"|"forgo
       setMessage(result.messageCode ? t("auth.checkEmail") : result.message??t("auth.checkEmail"));
     }catch{setBusy(false);setErrorCode("AUTH_NETWORK");}
   }
-  return <main className="auth-page" lang={locale}><div className="auth-brand-row"><Link href="/" className="brand"><span className="logo">N</span><b>NightProfit</b></Link><AuthLocaleSwitch/></div><section className="auth-card" aria-labelledby="auth-title">
+  return <main className="auth-page" lang={locale}><div className="auth-brand-row"><Link href="/" className="brand"><span className="cq-mark">CLI<span className="cq-n">N</span>IQ</span><span className="cq-mark-sub">Team</span></Link><AuthLocaleSwitch/></div><section className="auth-card" aria-labelledby="auth-title">
     <span className="eyebrow">{mode==="login"?t("auth.secureLogin"):mode==="signup"?t("auth.start"):t("auth.recovery")}</span>
     <h1 id="auth-title">{mode==="login"?t("auth.welcome"):mode==="signup"?t("auth.createAccount"):mode==="forgot"?t("auth.forgotTitle"):t("auth.newPassword")}</h1>
     <p>{mode==="signup"?t("auth.signupHelp"):t("auth.sessionHelp")}</p>
@@ -58,6 +58,6 @@ function LocalizedAuthForm({ mode,initialError }: { mode:"login"|"signup"|"forgo
       {errorCode&&<div className="form-message error" role="alert" aria-live="assertive">{t(authErrorMessageKey(mode,errorCode))}</div>}
       {message&&<div className="form-message" role="status" aria-live="polite">{message}</div>}
     </form>
-    <footer>{mode==="login"?<><Link href="/forgot-password">{t("auth.forgot")}</Link><Link href="/signup">{t("auth.noAccount")}</Link></>:<><Link href="/login">{t("auth.back")}</Link>{mode==="update"&&errorCode?<Link href="/forgot-password">{t("auth.requestNewLink")}</Link>:null}</>}</footer>
+    <footer>{mode==="login"?<><Link href="/forgot-password">{t("auth.forgot")}</Link></>:<><Link href="/login">{t("auth.back")}</Link>{mode==="update"&&errorCode?<Link href="/forgot-password">{t("auth.requestNewLink")}</Link>:null}</>}</footer>
   </section></main>;
 }

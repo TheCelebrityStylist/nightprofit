@@ -38,7 +38,8 @@ describe("truthful availability campaigns", () => {
 
   it("shows provider readiness and missing-phone counts before creation", () => {
     expect(manager).toContain("availability-campaign-summary");
-    expect(manager).toContain("WhatsApp provider not connected");
+    expect(manager).toContain("WhatsApp not connected yet");
+    expect(manager).toContain("WhatsApp connected.");
     expect(manager).toContain("schedule");
     expect(manager).toContain("Message preview");
   });

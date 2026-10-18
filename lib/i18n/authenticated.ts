@@ -12,7 +12,7 @@ export const authenticatedMessages = {
     "auth.newPassword": "Nieuw wachtwoord",
     "auth.signupHelp":
       "Je bevestigt eerst je e-mailadres. Daarna richt je je organisatie en eerste vestiging in.",
-    "auth.sessionHelp": "Je sessie wordt veilig beheerd met httpOnly-cookies.",
+    "auth.sessionHelp": "Log in met het e-mailadres waarop je bent uitgenodigd.",
     "auth.name": "Naam",
     "auth.email": "E-mailadres",
     "auth.password": "Wachtwoord",
@@ -539,7 +539,7 @@ export const authenticatedMessages = {
     "auth.newPassword": "Choose a new password",
     "auth.signupHelp":
       "Confirm your email first, then set up your organisation and first venue.",
-    "auth.sessionHelp": "Your session is secured with httpOnly cookies.",
+    "auth.sessionHelp": "Log in with the email address you were invited with.",
     "auth.name": "Name",
     "auth.email": "Email address",
     "auth.password": "Password",
