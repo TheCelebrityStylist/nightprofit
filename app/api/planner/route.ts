@@ -16,6 +16,7 @@ const schema=z.discriminatedUnion("action",[
   z.object({action:z.literal("remove_slots"),...base,shiftIds:z.array(z.string().uuid()).min(1).max(300)}),
   z.object({action:z.literal("publish"),...base,weekStart:z.iso.date()}),
   z.object({action:z.literal("invite"),...base,staffId:z.string().uuid()}),
+  z.object({action:z.literal("set_contract"),...base,staffId:z.string().uuid(),engagementType:z.enum(["employee","temporary","contractor"])}),
 ]);
 
 const failure=(code:string,status=409)=>NextResponse.json({errorCode:code},{status});
@@ -29,7 +30,7 @@ export async function POST(request:Request){
   try{
     assertSameOrigin(request);
     const input=schema.parse(await request.json());
-    const capability=input.action==="invite"?"members.manage":"planning.manage";
+    const capability=input.action==="invite"||input.action==="set_contract"?"members.manage":"planning.manage";
     const {supabase}=await requireMembership(input.organisationId,capability,input.venueId);
     const rpc=(name:string,args:Record<string,unknown>)=>supabase.rpc(name as "clock_out",args as never) as unknown as Promise<{data:unknown;error:{message?:string}|null}>;
 
@@ -58,6 +59,14 @@ export async function POST(request:Request){
       const {data,error}=await rpc("publish_roster_v2",{target_organisation_id:input.organisationId,target_venue_id:input.venueId,target_window_start:windowStart,target_window_end:windowEnd,target_expected_revision:(drafts[0] as {revision:number}).revision,target_idempotency_key:crypto.randomUUID(),target_acknowledged_exceptions:[]});
       if(error)return failure(dbCode(error)||"PUBLISH_FAILED");
       return NextResponse.json({published:true,version:(data as {version?:number})?.version??null,weekStart:windowStart});
+    }
+
+    if(input.action==="set_contract"){
+      // Oproepkracht = "temporary". Membership was checked above; the admin client only touches this organisation's row.
+      const {data,error}=await createSupabaseAdminClient().from("staff_profiles").update({engagement_type:input.engagementType,updated_at:new Date().toISOString()}).eq("organisation_id",input.organisationId).eq("id",input.staffId).select("id");
+      if(error)throw error;
+      if(!data?.length)return failure("STAFF_NOT_FOUND",404);
+      return NextResponse.json({staffId:input.staffId,engagementType:input.engagementType});
     }
 
     // invite: a fresh personal link; older links stop working.

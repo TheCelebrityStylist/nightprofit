@@ -7,13 +7,14 @@ import { AddPersonPanel } from "./add-person";
 import { ServiceNightsPanel } from "./service-nights";
 import { WhatsappSetup } from "./whatsapp-setup";
 import { addDays, deadlineLabel, firstName, isoWeekNumber, mondayOf, nightOf, nightsLabel, zonedInstant } from "../lib/planning/nights";
+import { isOnCall, mainSlotKey, pickOpenSlot } from "../lib/planning/grid";
 
 type Lane = "staff" | "dj";
 type Answer = "available" | "preferably_not" | "unavailable";
 type Venue = { id: string; name: string; timezone: string };
 type Department = { id: string; venue_id: string; name: string; kind?: Lane };
 type Role = { id: string; department_id: string; name: string; hourly_cost_minor: string };
-export type PlannerStaff = { id: string; full_name: string; contact_phone: string | null; preferred_language: string; employment_status: string; invitation_state: string; auth_user_id: string | null };
+export type PlannerStaff = { id: string; full_name: string; contact_phone: string | null; preferred_language: string; employment_status: string; invitation_state: string; auth_user_id: string | null; engagement_type?: string | null };
 export type PlannerShift = { id: string; venue_id: string; department_id: string; role_id: string; staff_id: string | null; starts_at: string; ends_at: string; status: string; revision: number; locked: boolean };
 type AvailabilityRow = { staff_id: string; venue_id: string; starts_at: string; availability: string; submitted_at: string | null };
 type RequestRow = { id: string; venue_id: string; starts_at: string; ends_at: string; deadline_at: string; status: string; created_at: string; requested_dates: string[] | null };
@@ -93,7 +94,8 @@ export function Planner({
   const [mode, setMode] = useState<"day" | "week" | "month">("week");
   const week = mondayOf(focus);
   const [lane, setLane] = useState<Lane>("staff");
-  const [view, setView] = useState<"nights" | "people">("nights");
+  const [view, setView] = useState<"nights" | "people">("people");
+  const [showOnCall, setShowOnCall] = useState(false);
   const [shifts, setShifts] = useState(initialShifts);
   const [sourceShifts, setSourceShifts] = useState(initialShifts);
   if (sourceShifts !== initialShifts) { setSourceShifts(initialShifts); setShifts(initialShifts); }
@@ -118,7 +120,8 @@ export function Planner({
   const team = staff.filter((person) => person.employment_status !== "deactivated");
   const lanesOf = (staffId: string) => new Set(qualifications.filter((row) => row.staff_id === staffId).map((row) => laneOfRole(row.role_id)));
   const inLane = (staffId: string, which: Lane) => { const lanes = lanesOf(staffId); return lanes.size ? lanes.has(which) : which === "staff"; };
-  const laneTeam = team.filter((person) => inLane(person.id, lane)).sort((a, b) => a.full_name.localeCompare(b.full_name));
+  const laneTeam = team.filter((person) => inLane(person.id, lane)).sort((a, b) => Number(isOnCall(a)) - Number(isOnCall(b)) || a.full_name.localeCompare(b.full_name));
+  const laneName = (which: Lane) => venueDepartments.find((department) => (department.kind === "dj" ? "dj" : "staff") === which)?.name ?? (which === "dj" ? "DJ" : "Personeel");
   const personById = new Map(staff.map((person) => [person.id, person]));
 
   const answers = useMemo(() => {
@@ -200,13 +203,28 @@ export function Planner({
     }
   }
 
-  async function addSlot(template: PlannerShift) {
+  async function addSlot(template: PlannerShift, refresh = true) {
     setBusy(true);
     try {
       const result = await post({ action: "add_slot", roleId: template.role_id, startsAt: template.starts_at, endsAt: template.ends_at });
-      setShifts((current) => [...current, { ...template, id: String(result.shiftId), staff_id: null, status: "draft", revision: 1, locked: false }]);
-      router.refresh();
-    } catch (error) { say({ text: errorText(error instanceof Error ? error.message : ""), tone: "bad" }); } finally { setBusy(false); }
+      const id = String(result.shiftId);
+      setShifts((current) => [...current, { ...template, id, staff_id: null, status: "draft", revision: 1, locked: false }]);
+      if (refresh) router.refresh();
+      return id;
+    } catch (error) { say({ text: errorText(error instanceof Error ? error.message : ""), tone: "bad" }); return null; } finally { setBusy(false); }
+  }
+
+  // One click in the grid: put someone on the night at the standard time. No open plek left? Add one.
+  async function quickPlan(person: PlannerStaff, night: string) {
+    const slots = slotsOf(night);
+    if (!slots.length) { say({ text: `${capital(dayLong(night))} heeft nog geen plekken. Zet de week eerst klaar.` }); return; }
+    const open = pickOpenSlot(slots);
+    const name = firstName(person.full_name);
+    if (open) { await assign([{ shiftId: open.id, staffId: person.id }], `${name} werkt ${dayLong(night)}, ${time(open.starts_at)} – ${time(open.ends_at)}.`); return; }
+    const main = mainSlotKey(slots);
+    const template = slots.find((slot) => `${slot.starts_at}|${slot.ends_at}` === main) ?? slots[0];
+    const id = await addSlot(template, false);
+    if (id) await assign([{ shiftId: id, staffId: person.id }], `${name} werkt ${dayLong(night)} (extra plek), ${time(template.starts_at)} – ${time(template.ends_at)}.`);
   }
 
   async function removeSlot(shiftId: string) {
@@ -240,7 +258,7 @@ export function Planner({
       for (const slot of slotsOf(night).filter((shift) => !shift.staff_id)) {
         const candidates = laneTeam
           .filter((person) => answerOf(person.id, night) === "available" && !taken.has(`${person.id}|${night}`))
-          .sort((a, b) => (load.get(a.id) ?? 0) - (load.get(b.id) ?? 0) || stableHash(a.id + night) - stableHash(b.id + night));
+          .sort((a, b) => Number(isOnCall(a)) - Number(isOnCall(b)) || (load.get(a.id) ?? 0) - (load.get(b.id) ?? 0) || stableHash(a.id + night) - stableHash(b.id + night));
         const pick = candidates[0];
         if (!pick) { stillOpen += 1; continue; }
         changes.push({ shiftId: slot.id, staffId: pick.id });
@@ -478,14 +496,14 @@ export function Planner({
           <div className="pl-lanes" role="tablist" aria-label="Planning">
             {(["staff", "dj"] as Lane[]).map((which) => {
               const rows = weekShifts.filter((shift) => laneOfRole(shift.role_id) === which);
-              return <button key={which} type="button" role="tab" aria-selected={lane === which} className={lane === which ? "on" : ""} onClick={() => setLane(which)}>{which === "staff" ? "Personeel" : "DJ's"}{rows.length && mode === "week" ? <span>{rows.filter((shift) => shift.staff_id).length}/{rows.length}</span> : null}</button>;
+              return <button key={which} type="button" role="tab" aria-selected={lane === which} className={lane === which ? "on" : ""} onClick={() => setLane(which)}>{laneName(which)}{rows.length && mode === "week" ? <span>{rows.filter((shift) => shift.staff_id).length}/{rows.length}</span> : null}</button>;
             })}
           </div>
         ) : null}
         {mode === "week" ? (
           <div className="pl-views" role="tablist" aria-label="Indeling">
+            <button type="button" role="tab" aria-selected={view === "people"} className={view === "people" ? "on" : ""} onClick={() => setView("people")}>Rooster</button>
             <button type="button" role="tab" aria-selected={view === "nights"} className={view === "nights" ? "on" : ""} onClick={() => setView("nights")}>Per avond</button>
-            <button type="button" role="tab" aria-selected={view === "people"} className={view === "people" ? "on" : ""} onClick={() => setView("people")}>Per persoon</button>
           </div>
         ) : null}
             </div>
@@ -599,34 +617,99 @@ export function Planner({
           {closedThisWeek.length ? <button type="button" className="pl-open-night" onClick={() => setSheet({ kind: "open", date: closedThisWeek[0] })}>+ Andere avond openen, bijvoorbeeld voor een event</button> : null}
         </>
       ) : (
-        <div className="pl-people">
-          <table>
-            <thead>
-              <tr><th scope="col">{lane === "dj" ? "DJ" : "Naam"}</th>{nights.map((night) => <th scope="col" key={night}><button type="button" className="pl-th-day" onClick={() => { setFocus(night); setMode("day"); }}><b>{dayShort(night)}</b><span>{parse(night).getUTCDate()}</span></button></th>)}<th scope="col">Diensten</th></tr>
-            </thead>
-            <tbody>
-              {laneTeam.map((person) => (
-                <tr key={person.id}>
-                  <th scope="row"><span className="pl-who"><span className="pl-avatar a-unknown" aria-hidden>{initials(person.full_name)}</span>{shortName(person.full_name)}</span></th>
-                  {nights.map((night) => {
-                    const value = answerOf(person.id, night);
-                    const shift = shiftOn(person.id, night);
-                    const label = shift ? `${time(shift.starts_at)}` : value === "available" ? "kan" : value === "preferably_not" ? "liever niet" : value === "unavailable" ? "kan niet" : "–";
-                    return (
-                      <td key={night}>
-                        <button type="button" disabled={night < today} className={`pl-cell a-${value ?? "unknown"}${shift ? " is-on" : ""}`} onClick={() => setSheet({ kind: "cell", staffId: person.id, night })} aria-label={`${person.full_name}, ${dayLong(night)}: ${shift ? `werkt ${time(shift.starts_at)}` : label}`}>
-                          {label}
+        (() => {
+          const regulars = laneTeam.filter((person) => !isOnCall(person));
+          const onCall = laneTeam.filter(isOnCall);
+          const onCallActive = onCall.some((person) => nights.some((night) => shiftOn(person.id, night)));
+          const openOnCall = showOnCall || onCallActive;
+          const asked = (night: string) => Boolean(currentRequest && (currentRequest.requested_dates ? currentRequest.requested_dates.includes(night) : true));
+          const row = (person: PlannerStaff) => (
+            <tr key={person.id}>
+              <th scope="row"><span className="pl-who"><span className={`pl-avatar${isOnCall(person) ? " is-oncall" : ""}`} aria-hidden>{initials(person.full_name)}</span><span className="pl-who-name">{person.full_name}</span></span></th>
+              {nights.map((night) => {
+                const value = answerOf(person.id, night);
+                const shift = shiftOn(person.id, night);
+                const closed = !slotsOf(night).length;
+                const past = night < today;
+                const label = shift ? <>{time(shift.starts_at)}<span className="pl-cell-end"><i>–</i>{time(shift.ends_at)}</span></>
+                  : value === "available" ? <><span aria-hidden>✓</span> Kan</>
+                  : value === "preferably_not" ? "Liever niet"
+                  : value === "unavailable" ? <><span aria-hidden>✕</span> Kan niet</>
+                  : asked(night) ? "?" : "–";
+                const spoken = shift ? `werkt ${time(shift.starts_at)} tot ${time(shift.ends_at)}` : value === "available" ? "kan" : value === "preferably_not" ? "liever niet" : value === "unavailable" ? "kan niet" : "geen antwoord";
+                return (
+                  <td key={night}>
+                    <button
+                      type="button"
+                      disabled={past || closed || busy}
+                      className={`pl-cell a-${value ?? "unknown"}${shift ? " is-on" : ""}${shift?.status === "draft" ? " is-draft" : ""}`}
+                      title={shift ? "Andere tijd of eraf halen" : value === "unavailable" ? "Zei kan niet" : "Klik om in te plannen"}
+                      onClick={() => (shift || value === "unavailable" ? setSheet({ kind: "cell", staffId: person.id, night }) : void quickPlan(person, night))}
+                      aria-label={`${person.full_name}, ${dayLong(night)}: ${spoken}. ${shift ? "Wijzigen" : "Inplannen"}`}
+                    >
+                      {label}
+                    </button>
+                  </td>
+                );
+              })}
+              <td className="pl-load">{weekLoad(person.id) || ""}</td>
+            </tr>
+          );
+          return (
+            <div className="pl-people">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">{laneName(lane)}<small>{regulars.length} {regulars.length === 1 ? "persoon" : "mensen"}</small></th>
+                    {nights.map((night) => {
+                      const slots = slotsOf(night);
+                      const main = mainSlotKey(slots).split("|");
+                      return (
+                        <th scope="col" key={night}>
+                          <button type="button" className="pl-th-day" onClick={() => { setFocus(night); setMode("day"); }}>
+                            <span><b>{dayShort(night)}</b> {parse(night).getUTCDate()} {dateShort(night).split(" ")[1]}</span>
+                            <small>{slots.length ? `${time(main[0])} – ${time(main[1])}` : "nog dicht"}</small>
+                          </button>
+                        </th>
+                      );
+                    })}
+                    <th scope="col" className="pl-load-head">Week</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {regulars.map(row)}
+                  {onCall.length ? (
+                    <tr className="pl-section-row">
+                      <th scope="rowgroup" colSpan={nights.length + 2}>
+                        <button type="button" aria-expanded={openOnCall} onClick={() => setShowOnCall(!openOnCall)} disabled={onCallActive}>
+                          <span aria-hidden>{openOnCall ? "−" : "+"}</span> Oproepkrachten <small>{onCall.length}</small>
                         </button>
-                      </td>
-                    );
-                  })}
-                  <td className="pl-load">{weekLoad(person.id)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {!laneTeam.length ? <p className="pl-night-empty">Nog niemand in dit team. Voeg mensen toe via Team.</p> : null}
-        </div>
+                      </th>
+                    </tr>
+                  ) : null}
+                  {openOnCall ? onCall.map(row) : null}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <th scope="row">Kan</th>
+                    {nights.map((night) => <td key={night}>{laneTeam.filter((person) => answerOf(person.id, night) === "available").length}</td>)}
+                    <td />
+                  </tr>
+                  <tr>
+                    <th scope="row">Gepland</th>
+                    {nights.map((night) => {
+                      const slots = slotsOf(night);
+                      const count = slots.filter((slot) => slot.staff_id).length;
+                      return <td key={night} className={slots.length && count >= slots.length ? "is-full" : count ? "is-part" : ""}>{slots.length ? <><b>{count}</b>/{slots.length}</> : "–"}</td>;
+                    })}
+                    <td />
+                  </tr>
+                </tfoot>
+              </table>
+              {!laneTeam.length ? <p className="pl-night-empty">Nog niemand in {laneName(lane)}. Voeg mensen toe via Team.</p> : <p className="pl-grid-hint">Klik op een vakje om iemand in te plannen op de standaardtijd. Klik nog eens voor een andere tijd of om eraf te halen.</p>}
+            </div>
+          );
+        })()
       )}
 
       <p className="pl-footnote"><Link href="/app/planning/uitgebreid">Uitgebreide planner</Link> voor verlof, ruilen en loonkosten.</p>
@@ -680,23 +763,43 @@ export function Planner({
             const night = sheet.night;
             const shift = shiftOn(person.id, night);
             const value = answerOf(person.id, night);
-            const openGroups = new Map<string, PlannerShift>();
-            for (const slot of slotsOf(night)) if (!slot.staff_id && !openGroups.has(`${slot.starts_at}|${slot.ends_at}|${slot.role_id}`)) openGroups.set(`${slot.starts_at}|${slot.ends_at}|${slot.role_id}`, slot);
+            const name = firstName(person.full_name);
+            // Every time this night has, except the one they already work. A full time gets an extra plek.
+            const timeGroups = new Map<string, { template: PlannerShift; open?: PlannerShift; openCount: number }>();
+            for (const slot of slotsOf(night)) {
+              const key = `${slot.starts_at}|${slot.ends_at}|${slot.role_id}`;
+              if (shift && slot.starts_at === shift.starts_at && slot.ends_at === shift.ends_at && slot.role_id === shift.role_id) continue;
+              const group = timeGroups.get(key) ?? { template: slot, openCount: 0 };
+              if (!slot.staff_id) { group.openCount += 1; group.open ??= slot; }
+              timeGroups.set(key, group);
+            }
+            const multiRole = new Set(slotsOf(night).map((row) => row.role_id)).size > 1;
+            const pick = async (group: { template: PlannerShift; open?: PlannerShift }) => {
+              setSheet(null);
+              const target = group.open?.id ?? (await addSlot(group.template, false));
+              if (!target) return;
+              void assign(shift ? [{ shiftId: shift.id, staffId: null }, { shiftId: target, staffId: person.id }] : [{ shiftId: target, staffId: person.id }], `${name} werkt ${dayLong(night)}, ${time(group.template.starts_at)} – ${time(group.template.ends_at)}.`);
+            };
             return (
               <div className="pl-picker">
-                <p className="pl-picker-sub">{person.full_name}: {value === "available" ? "kan" : value === "preferably_not" ? "liever niet" : value === "unavailable" ? "kan niet" : "nog geen antwoord"}.</p>
+                <p className="pl-picker-sub"><b>{person.full_name}</b>{isOnCall(person) ? " (oproepkracht)" : ""}: {value === "available" ? "kan" : value === "preferably_not" ? "liever niet" : value === "unavailable" ? "zei kan niet" : "nog geen antwoord"}.</p>
+                {shift ? <p className="pl-cell-now">Werkt <b>{time(shift.starts_at)} – {time(shift.ends_at)}</b>{shift.status === "draft" ? ", nog niet gepubliceerd" : ""}.</p> : null}
+                {value === "unavailable" && !shift ? <p className="pl-warn">{name} gaf aan dat dit niet kan. Plan alleen in als je het hebt afgestemd.</p> : null}
+                {timeGroups.size ? (
+                  <>
+                    <h3 className="pl-sheet-h">{shift ? "Andere tijd" : "Kies de tijd"}</h3>
+                    <ul className="pl-times">
+                      {[...timeGroups.values()].map((group) => (
+                        <li key={group.template.id}><button type="button" disabled={busy} onClick={() => void pick(group)}><b>{time(group.template.starts_at)} – {time(group.template.ends_at)}</b><small>{group.openCount ? `${group.openCount} open` : "vol, er komt een plek bij"}{multiRole ? ` · ${roleById.get(group.template.role_id)?.name ?? ""}` : ""}</small></button></li>
+                      ))}
+                    </ul>
+                  </>
+                ) : null}
                 {shift ? (
                   <div className="pl-sheet-actions">
-                    <p>Werkt {time(shift.starts_at)} – {time(shift.ends_at)}.</p>
-                    <button type="button" className="pl-btn" onClick={() => { setSheet(null); void assign([{ shiftId: shift.id, staffId: null }], `${firstName(person.full_name)} staat niet meer op ${dayLong(night)}.`); }}>Haal van deze avond af</button>
+                    <button type="button" className="pl-btn" onClick={() => { setSheet(null); void assign([{ shiftId: shift.id, staffId: null }], `${name} staat niet meer op ${dayLong(night)}.`); }}>Haal {name} van deze avond af</button>
                   </div>
-                ) : openGroups.size ? (
-                  <ul className="pl-times">
-                    {[...openGroups.values()].map((slot) => (
-                      <li key={slot.id}><button type="button" onClick={() => { setSheet(null); void assign([{ shiftId: slot.id, staffId: person.id }], `${firstName(person.full_name)} werkt ${dayLong(night)}.`); }}><b>{time(slot.starts_at)} – {time(slot.ends_at)}</b><small>{slotsOf(night).filter((row) => !row.staff_id && row.starts_at === slot.starts_at && row.ends_at === slot.ends_at).length} open</small></button></li>
-                    ))}
-                  </ul>
-                ) : <p>Er is geen open plek meer op {dayLong(night)}. Voeg er een toe via Per avond.</p>}
+                ) : null}
               </div>
             );
           })() : sheet.kind === "request" ? (
@@ -706,7 +809,7 @@ export function Planner({
           ) : sheet.kind === "publish" ? (
             <PublishSheet organisationId={organisationId} venue={venue} week={week} weekNumber={weekNumber} weekShifts={weekShifts} people={personById} open={weekShifts.filter((shift) => !shift.staff_id).length} drafts={drafts.length} whatsappReady={whatsappReady} time={time} onPublished={() => router.refresh()} />
           ) : sheet.kind === "team" ? (
-            <TeamSheet organisationId={organisationId} venueId={venue.id} team={team} inLane={inLane} hasDj={hasDj} plannerUserIds={plannerUserIds} canManageMembers={canManageMembers} whatsappReady={whatsappReady} onAdd={() => setSheet({ kind: "person" })} onChanged={(text) => { say({ text }); router.refresh(); }} />
+            <TeamSheet organisationId={organisationId} venueId={venue.id} team={team} inLane={inLane} laneName={laneName} hasDj={hasDj} plannerUserIds={plannerUserIds} canManageMembers={canManageMembers} whatsappReady={whatsappReady} onAdd={() => setSheet({ kind: "person" })} onChanged={(text) => { say({ text }); router.refresh(); }} />
           ) : sheet.kind === "person" ? (
             canManageMembers ? (
               <AddPersonPanel
@@ -1012,8 +1115,8 @@ function PublishSheet({ organisationId, venue, week, weekNumber, weekShifts, peo
 }
 
 // ---------- team ----------
-function TeamSheet({ organisationId, venueId, team, inLane, hasDj, plannerUserIds, canManageMembers, whatsappReady, onAdd, onChanged }: {
-  organisationId: string; venueId: string; team: PlannerStaff[]; inLane: (id: string, lane: Lane) => boolean; hasDj: boolean; plannerUserIds: string[]; canManageMembers: boolean; whatsappReady: boolean; onAdd: () => void; onChanged: (text: string) => void;
+function TeamSheet({ organisationId, venueId, team, inLane, laneName, hasDj, plannerUserIds, canManageMembers, whatsappReady, onAdd, onChanged }: {
+  organisationId: string; venueId: string; team: PlannerStaff[]; inLane: (id: string, lane: Lane) => boolean; laneName: (lane: Lane) => string; hasDj: boolean; plannerUserIds: string[]; canManageMembers: boolean; whatsappReady: boolean; onAdd: () => void; onChanged: (text: string) => void;
 }) {
   const [busy, setBusy] = useState("");
   const [invite, setInvite] = useState<Record<string, { state: string; url: string; link: string }>>({});
@@ -1038,6 +1141,15 @@ function TeamSheet({ organisationId, venueId, team, inLane, hasDj, plannerUserId
     } catch { onChanged("Dat lukte niet."); } finally { setBusy(""); }
   }
 
+  async function setOnCall(person: PlannerStaff, onCall: boolean) {
+    setBusy(person.id);
+    try {
+      const response = await fetch("/api/planner", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "set_contract", organisationId, venueId, staffId: person.id, engagementType: onCall ? "temporary" : "employee" }) });
+      if (!response.ok) throw new Error();
+      onChanged(onCall ? `${firstName(person.full_name)} staat nu bij de oproepkrachten.` : `${firstName(person.full_name)} is geen oproepkracht meer.`);
+    } catch { onChanged("Dat lukte niet."); } finally { setBusy(""); }
+  }
+
   return (
     <div className="pl-team">
       {canManageMembers ? <button type="button" className="pl-btn pl-btn--go pl-btn--wide" onClick={onAdd}>+ Persoon toevoegen</button> : <p className="pl-note">Alleen de eigenaar of een beheerder kan mensen toevoegen.</p>}
@@ -1045,7 +1157,7 @@ function TeamSheet({ organisationId, venueId, team, inLane, hasDj, plannerUserId
         const people = team.filter((person) => inLane(person.id, which)).sort((a, b) => a.full_name.localeCompare(b.full_name));
         return (
           <section key={which}>
-            <h3>{which === "staff" ? "Personeel" : "DJ's"}<span>{people.length}</span></h3>
+            <h3>{laneName(which)}<span>{people.length}</span></h3>
             {!people.length ? <p className="pl-note">Nog niemand.</p> : null}
             <ul className="pl-teamlist">
               {people.map((person) => {
@@ -1055,7 +1167,7 @@ function TeamSheet({ organisationId, venueId, team, inLane, hasDj, plannerUserId
                   <li key={person.id}>
                     <span className="pl-avatar a-unknown" aria-hidden>{initials(person.full_name)}</span>
                     <div className="pl-team-who">
-                      <b>{person.full_name}{isPlanner ? <em>planner</em> : null}</b>
+                      <b>{person.full_name}{isPlanner ? <em>planner</em> : null}{isOnCall(person) ? <em>oproep</em> : null}</b>
                       <small>{person.auth_user_id ? "Heeft een account" : person.invitation_state === "pending" || person.invitation_state === "invited" ? "Uitgenodigd, nog geen account" : "Nog niet uitgenodigd"}{person.contact_phone ? "" : ", geen telefoonnummer"}</small>
                     </div>
                     <div className="pl-team-actions">
@@ -1064,6 +1176,7 @@ function TeamSheet({ organisationId, venueId, team, inLane, hasDj, plannerUserId
                         : sent ? (sent.url ? <a className="pl-btn" href={sent.url} target="_blank" rel="noreferrer">Open WhatsApp</a> : <button type="button" className="pl-btn" onClick={() => { void navigator.clipboard.writeText(sent.link); onChanged("Link gekopieerd."); }}>Kopieer link</button>)
                         : <button type="button" className="pl-btn" disabled={busy === person.id} onClick={() => void sendInvite(person)}>{person.invitation_state === "pending" ? "Opnieuw uitnodigen" : "Uitnodigen"}</button>
                       ) : null}
+                      {which === "staff" && canManageMembers ? <button type="button" className={`pl-btn${isOnCall(person) ? " is-on" : " pl-btn--quiet"}`} aria-pressed={isOnCall(person)} disabled={busy === person.id} onClick={() => void setOnCall(person, !isOnCall(person))}>Oproep</button> : null}
                       {person.auth_user_id && canManageMembers ? <button type="button" className={`pl-btn${isPlanner ? " is-on" : " pl-btn--quiet"}`} aria-pressed={isPlanner} disabled={busy === person.id} onClick={() => void setPlanner(person, !isPlanner)}>{isPlanner ? "Planner" : "Maak planner"}</button> : null}
                     </div>
                   </li>

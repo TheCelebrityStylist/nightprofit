@@ -964,7 +964,7 @@ async function plannerPage(
   ] = await Promise.all([
     supabase.from("departments").select("id,venue_id,name,kind").eq("organisation_id", organisationId).order("name"),
     supabase.from("operational_roles").select("id,department_id,name,hourly_cost_minor").eq("organisation_id", organisationId).order("name"),
-    supabase.from("staff_profiles").select("id,full_name,contact_phone,preferred_language,employment_status,invitation_state,auth_user_id").eq("organisation_id", organisationId).order("full_name"),
+    supabase.from("staff_profiles").select("id,full_name,contact_phone,preferred_language,employment_status,invitation_state,auth_user_id,engagement_type").eq("organisation_id", organisationId).order("full_name"),
     fetchAllRows((from,to)=>supabase.from("shifts").select("id,venue_id,department_id,role_id,staff_id,starts_at,ends_at,status,revision,locked").eq("organisation_id", organisationId).gte("starts_at", range.from).lt("starts_at", range.to).order("starts_at").order("id").range(from,to)),
     fetchAllRows((from,to)=>supabase.from("staff_availability").select("staff_id,venue_id,starts_at,availability,submitted_at").eq("organisation_id", organisationId).gte("starts_at", range.from).lt("starts_at", range.to).order("starts_at").order("id").range(from,to)),
     supabase.from("availability_request_periods").select("id,venue_id,starts_at,ends_at,deadline_at,status,created_at,requested_dates").eq("organisation_id", organisationId).order("created_at", { ascending: false }).limit(40),
