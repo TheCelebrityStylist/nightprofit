@@ -29,7 +29,7 @@ export function AddPersonPanel({
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [roleId, setRoleId] = useState(firstRole?.id ?? "");
-  const [freelance, setFreelance] = useState(firstRole?.lane === "dj");
+  const [contract, setContract] = useState<"employee" | "temporary" | "contractor">(firstRole?.lane === "dj" ? "contractor" : "employee");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [created, setCreated] = useState<Created | null>(null);
@@ -48,7 +48,7 @@ export function AddPersonPanel({
           organisationId,
           locale: locale === "nl" ? "nl-NL" : "en-US",
           action: "staff",
-          values: { venueId, departmentId: role.department_id, roleId: role.id, fullName: name.trim(), email: "", phone: phone.trim(), accessRole: "employee", engagementType: freelance ? "contractor" : "employee", preferredLanguage: locale },
+          values: { venueId, departmentId: role.department_id, roleId: role.id, fullName: name.trim(), email: "", phone: phone.trim(), accessRole: "employee", engagementType: contract, preferredLanguage: locale },
         }),
       });
       const result = (await response.json()) as { errorCode?: string; staffId?: string; invitation?: { link: string; whatsappUrl: string } };
@@ -118,10 +118,15 @@ export function AddPersonPanel({
       <fieldset className="add-person-roles">
         <legend>{tx("Wat doet diegene?", "What do they do?")}</legend>
         {roles.map((item) => (
-          <button type="button" key={item.id} aria-pressed={roleId === item.id} className={roleId === item.id ? "on" : ""} onClick={() => { setRoleId(item.id); setFreelance(item.lane === "dj"); }}>{item.name}</button>
+          <button type="button" key={item.id} aria-pressed={roleId === item.id} className={roleId === item.id ? "on" : ""} onClick={() => { setRoleId(item.id); setContract(item.lane === "dj" ? "contractor" : "employee"); }}>{item.name}</button>
         ))}
       </fieldset>
-      <label className="add-person-toggle"><input type="checkbox" checked={freelance} onChange={(event) => setFreelance(event.target.checked)} /> {tx("Zelfstandige (zzp)", "Freelancer")}</label>
+      <fieldset className="add-person-roles add-person-contract">
+        <legend>{tx("Soort", "Type")}</legend>
+        {([["employee", tx("Vast", "Regular")], ["temporary", tx("Oproepkracht", "On call")], ["contractor", tx("Zzp", "Freelance")]] as const).map(([value, label]) => (
+          <button type="button" key={value} aria-pressed={contract === value} className={contract === value ? "on" : ""} onClick={() => setContract(value)}>{label}</button>
+        ))}
+      </fieldset>
       {error ? <p className="add-person-error" role="alert">{error}</p> : null}
       <button className="primary" disabled={busy || name.trim().length < 2 || !role}>{busy ? tx("Bezig…", "Saving…") : tx("Toevoegen", "Add")}</button>
     </form>
