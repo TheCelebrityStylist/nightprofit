@@ -58,6 +58,6 @@ export async function POST(request: Request) {
     if (error) throw error;
     return NextResponse.json({ operation: data, message: input.decision === "approved" ? "Operationeel plan goedgekeurd." : "Plan teruggestuurd voor aanpassing." });
   } catch (error) {
-    return securityErrorResponse(error);
+    return securityErrorResponse(error) ?? NextResponse.json({ errorCode: "SERVICE_OPERATION_FAILED" }, { status: 400 });
   }
 }
