@@ -968,7 +968,7 @@ async function plannerPage(
     fetchAllRows((from,to)=>supabase.from("shifts").select("id,venue_id,department_id,role_id,staff_id,starts_at,ends_at,status,revision,locked").eq("organisation_id", organisationId).gte("starts_at", range.from).lt("starts_at", range.to).order("starts_at").order("id").range(from,to)),
     fetchAllRows((from,to)=>supabase.from("staff_availability").select("staff_id,venue_id,starts_at,availability,submitted_at").eq("organisation_id", organisationId).gte("starts_at", range.from).lt("starts_at", range.to).order("starts_at").order("id").range(from,to)),
     supabase.from("availability_request_periods").select("id,venue_id,starts_at,ends_at,deadline_at,status,created_at,requested_dates").eq("organisation_id", organisationId).order("created_at", { ascending: false }).limit(40),
-    supabase.from("availability_request_recipients").select("id,request_id,staff_id,status").eq("organisation_id", organisationId).order("created_at", { ascending: false }).limit(1000),
+    supabase.from("availability_request_recipients").select("id,request_id,staff_id,status,reminder_count,reminded_at").eq("organisation_id", organisationId).order("created_at", { ascending: false }).limit(1000),
     supabase.from("staff_role_qualifications").select("staff_id,role_id").eq("organisation_id", organisationId),
     supabase.from("venue_service_patterns" as "departments").select("venue_id,iso_weekday,active,lines").eq("organisation_id", organisationId),
     supabase.from("member_capability_overrides").select("user_id").eq("organisation_id", organisationId).eq("capability", "planning.manage").eq("allowed", true),
