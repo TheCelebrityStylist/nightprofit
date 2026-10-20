@@ -135,6 +135,48 @@ export function MyRoster({
           <p className="me-empty">{tx("Geen diensten deze week.", "No shifts this week.")}{week === 0 && !requests.length ? tx(" Als je planner iets vraagt, zie je het hier.", " When your planner asks you something, it shows up here.") : ""}</p>
         )}
       </section>
+
+      <CalendarLink organisationId={organisationId} locale={locale} />
     </div>
+  );
+}
+
+// ---------- shifts in your own calendar ----------
+function CalendarLink({ organisationId, locale }: { organisationId: string; locale: "nl" | "en" }) {
+  const tx = (nl: string, en: string) => (locale === "nl" ? nl : en);
+  const [links, setLinks] = useState<{ https: string; webcal: string; google: string } | null>(null);
+  const [state, setState] = useState<"idle" | "busy" | "copied" | "error">("idle");
+
+  async function create() {
+    setState("busy");
+    try {
+      const response = await fetch("/api/workforce/calendar", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ organisationId }) });
+      if (!response.ok) throw new Error();
+      setLinks((await response.json()) as { https: string; webcal: string; google: string });
+      setState("idle");
+    } catch { setState("error"); }
+  }
+
+  return (
+    <section className="me-cal" aria-labelledby="me-cal-title">
+      <h2 id="me-cal-title">{tx("Rooster in je agenda", "Roster in your calendar")}</h2>
+      {!links ? (
+        <>
+          <p>{tx("Eén keer koppelen. Daarna staan je diensten vanzelf in je agenda, en wijzigingen ook.", "Connect once. Your shifts then show up in your calendar by themselves, changes included.")}</p>
+          <button type="button" className="me-cal-go" disabled={state === "busy"} onClick={() => void create()}>{state === "busy" ? tx("Bezig…", "Working…") : tx("Koppel mijn agenda", "Connect my calendar")}</button>
+          {state === "error" ? <p className="me-error" role="alert">{tx("Dat lukte niet. Probeer het opnieuw.", "That didn't work. Try again.")}</p> : null}
+        </>
+      ) : (
+        <>
+          <p>{tx("Kies je agenda:", "Pick your calendar:")}</p>
+          <div className="me-cal-options">
+            <a className="me-cal-go" href={links.webcal}>{tx("iPhone, iPad of Mac", "iPhone, iPad or Mac")}</a>
+            <a className="me-cal-go" href={links.google} target="_blank" rel="noreferrer">Google {tx("Agenda", "Calendar")}</a>
+            <button type="button" onClick={() => { void navigator.clipboard.writeText(links.https).then(() => setState("copied")); }}>{state === "copied" ? tx("Gekopieerd", "Copied") : tx("Kopieer link (Outlook en andere)", "Copy link (Outlook and others)")}</button>
+          </div>
+          <p className="me-cal-note">{tx("Deze link is persoonlijk: deel hem niet. Een nieuwe koppeling maken zet de oude link stop. Google ververst ongeveer elke paar uur, Apple elk uur.", "This link is personal: don't share it. Connecting again stops the old link. Google refreshes every few hours, Apple every hour.")}</p>
+        </>
+      )}
+    </section>
   );
 }

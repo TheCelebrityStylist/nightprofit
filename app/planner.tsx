@@ -18,7 +18,7 @@ export type PlannerStaff = { id: string; full_name: string; contact_phone: strin
 export type PlannerShift = { id: string; venue_id: string; department_id: string; role_id: string; staff_id: string | null; starts_at: string; ends_at: string; status: string; revision: number; locked: boolean };
 type AvailabilityRow = { staff_id: string; venue_id: string; starts_at: string; availability: string; submitted_at: string | null };
 type RequestRow = { id: string; venue_id: string; starts_at: string; ends_at: string; deadline_at: string; status: string; created_at: string; requested_dates: string[] | null };
-type RecipientRow = { id: string; request_id: string; staff_id: string; status: string };
+type RecipientRow = { id: string; request_id: string; staff_id: string; status: string; reminder_count?: number | null; reminded_at?: string | null };
 type Pattern = { venue_id: string; iso_weekday: number; active: boolean; lines: { role_id: string; count: number; start: string; end: string; break_minutes: number }[] };
 
 type Sheet =
@@ -169,6 +169,11 @@ export function Planner({
   const requestRecipients = currentRequest ? recipients.filter((row) => row.request_id === currentRequest.id) : [];
   const answeredCount = requestRecipients.filter((row) => ANSWERED.includes(row.status)).length;
   const deadlinePassed = currentRequest ? new Date(currentRequest.deadline_at).getTime() < now : false;
+  const silent = requestRecipients.filter((row) => !ANSWERED.includes(row.status) && row.status !== "cancelled");
+  const remindedSilent = silent.filter((row) => (row.reminder_count ?? 0) > 0).length;
+  const reminderNote = !currentRequest || deadlinePassed || !silent.length ? ""
+    : remindedSilent ? ` · ${remindedSilent} herinnerd, ${silent.length} nog stil`
+    : whatsappReady ? " · herinnering gaat 24 uur voor de deadline" : "";
 
   // ---------- writes ----------
   async function post(body: Record<string, unknown>) {
@@ -297,7 +302,7 @@ export function Planner({
         ? "Voeg eerst je team toe"
         : !currentRequest
         ? "Nog niet gevraagd"
-        : `${answeredCount} van ${requestRecipients.length} gereageerd${deadlinePassed ? ", deadline voorbij" : `, tot ${deadlineLabel(currentRequest.deadline_at, tz)}`}`,
+        : `${answeredCount} van ${requestRecipients.length} gereageerd${deadlinePassed ? ", deadline voorbij" : `, tot ${deadlineLabel(currentRequest.deadline_at, tz)}`}${reminderNote}`,
       action: !team.length
         ? <button type="button" className="pl-btn" onClick={() => setSheet(canManageMembers ? { kind: "person" } : { kind: "team" })}>+ Persoon toevoegen</button>
         : currentRequest
@@ -805,7 +810,7 @@ export function Planner({
           })() : sheet.kind === "request" ? (
             <RequestSheet now={now} organisationId={organisationId} venue={venue} today={today} week={week} activeWeekdays={activeWeekdays} plannedNights={new Set(live.map((shift) => nightOf(shift.starts_at, tz)))} team={team} inLane={inLane} hasDj={hasDj} whatsappReady={whatsappReady} onDone={(text) => { say({ text }); router.refresh(); }} />
           ) : sheet.kind === "responses" && currentRequest ? (
-            <ResponsesSheet request={currentRequest} recipients={requestRecipients} people={personById} answerOf={answerOf} tz={tz} onNew={() => setSheet({ kind: "request" })} />
+            <ResponsesSheet organisationId={organisationId} venueId={venue.id} now={now} whatsappReady={whatsappReady} request={currentRequest} recipients={requestRecipients} people={personById} answerOf={answerOf} tz={tz} onNew={() => setSheet({ kind: "request" })} onReminded={(text) => { say({ text }); router.refresh(); }} />
           ) : sheet.kind === "publish" ? (
             <PublishSheet organisationId={organisationId} venue={venue} week={week} weekNumber={weekNumber} weekShifts={weekShifts} people={personById} open={weekShifts.filter((shift) => !shift.staff_id).length} drafts={drafts.length} whatsappReady={whatsappReady} time={time} onPublished={() => router.refresh()} />
           ) : sheet.kind === "team" ? (
@@ -1006,12 +1011,32 @@ function RequestSheet({ now, organisationId, venue, today, week, activeWeekdays,
 }
 
 // ---------- who answered what ----------
-function ResponsesSheet({ request, recipients, people, answerOf, tz, onNew }: {
-  request: RequestRow; recipients: RecipientRow[]; people: Map<string, PlannerStaff>; answerOf: (staffId: string, night: string) => Answer | undefined; tz: string; onNew: () => void;
+function ResponsesSheet({ organisationId, venueId, now, whatsappReady, request, recipients, people, answerOf, tz, onNew, onReminded }: {
+  organisationId: string; venueId: string; now: number; whatsappReady: boolean;
+  request: RequestRow; recipients: RecipientRow[]; people: Map<string, PlannerStaff>; answerOf: (staffId: string, night: string) => Answer | undefined; tz: string; onNew: () => void; onReminded: (text: string) => void;
 }) {
   const nights = request.requested_dates ?? [];
   const rows = recipients.map((row) => ({ row, person: people.get(row.staff_id) })).filter((item) => item.person).sort((a, b) => Number(ANSWERED.includes(b.row.status)) - Number(ANSWERED.includes(a.row.status)) || a.person!.full_name.localeCompare(b.person!.full_name));
-  const missing = rows.filter((item) => !ANSWERED.includes(item.row.status));
+  const missing = rows.filter((item) => !ANSWERED.includes(item.row.status) && item.row.status !== "cancelled");
+  const open = new Date(request.deadline_at).getTime() > now;
+  const [state, setState] = useState<"idle" | "busy">("idle");
+  const [manual, setManual] = useState<{ staffId: string; name: string; whatsappUrl?: string; detail: string; state: string }[]>([]);
+  const reminderLabel = (row: RecipientRow) => (row.reminded_at ? `herinnerd ${new Date(row.reminded_at).toLocaleString("nl-NL", { weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: tz }).replace(".", "")}` : "");
+
+  async function remindNow() {
+    setState("busy");
+    try {
+      const response = await fetch("/api/availability/reminders", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ organisationId, venueId, requestId: request.id }) });
+      const body = (await response.json().catch(() => ({}))) as { sent?: number; outcomes?: { staffId: string; name: string; state: string; detail: string; whatsappUrl?: string }[] };
+      if (!response.ok) throw new Error();
+      const outcomes = body.outcomes ?? [];
+      const ready = outcomes.filter((row) => row.state === "manual");
+      setManual(ready);
+      const failed = outcomes.filter((row) => row.state === "failed" || row.state === "skipped").length;
+      onReminded(body.sent ? `${body.sent} ${body.sent === 1 ? "herinnering" : "herinneringen"} verstuurd via WhatsApp.${failed ? ` ${failed} niet gelukt.` : ""}` : ready.length ? `${ready.length} herinneringen klaar. Tik per persoon op Verstuur.` : outcomes.length ? "Niemand kon nu een herinnering krijgen (geen nummer of net al herinnerd)." : "Iedereen is al herinnerd of heeft geantwoord.");
+    } catch { onReminded("Herinneren lukte niet. Probeer het opnieuw."); } finally { setState("idle"); }
+  }
+
   return (
     <div className="pl-responses">
       <p className="pl-picker-sub">{nightsLabel(nights)}. Deadline {deadlineLabel(request.deadline_at, tz)}.</p>
@@ -1028,12 +1053,18 @@ function ResponsesSheet({ request, recipients, people, answerOf, tz, onNew }: {
       </table>
       {missing.length ? (
         <>
-          <h3>Nog geen antwoord</h3>
+          <h3>Nog geen antwoord<span>{missing.length}</span></h3>
+          <p className="pl-note">{whatsappReady ? "Wie niet antwoordt krijgt 24 uur voor de deadline vanzelf een herinnering via WhatsApp, met een nieuwe link." : "WhatsApp is niet gekoppeld: herinneren maakt per persoon een bericht klaar dat je zelf verstuurt."}</p>
+          {open ? <button type="button" className="pl-btn pl-btn--go pl-btn--wide" disabled={state === "busy"} onClick={() => void remindNow()}>{state === "busy" ? "Bezig…" : `Herinner nu (${missing.length})`}</button> : null}
           <ul className="pl-sendlist">
             {missing.map(({ row, person }) => {
-              const text = `Hoi ${firstName(person!.full_name)}! Wil je nog even laten weten of je ${nightsLabel(nights)} kunt? De link staat in je WhatsApp, of kijk in de app onder Mijn rooster.`;
-              const number = waNumber(person!.contact_phone);
-              return <li key={row.id}><span>{person!.full_name}</span>{number ? <a className="pl-btn" href={`https://wa.me/${number}?text=${encodeURIComponent(text)}`} target="_blank" rel="noreferrer">Herinner</a> : <small>geen nummer</small>}</li>;
+              const ready = manual.find((item) => item.staffId === row.staff_id);
+              return (
+                <li key={row.id}>
+                  <span>{person!.full_name}<small>{reminderLabel(row) || (person!.contact_phone ? "nog niet herinnerd" : "geen nummer")}</small></span>
+                  {ready?.whatsappUrl ? <a className="pl-btn" href={ready.whatsappUrl} target="_blank" rel="noreferrer">Verstuur</a> : (row.reminder_count ?? 0) > 0 ? <em className="a-maybe">{row.reminder_count}×</em> : null}
+                </li>
+              );
             })}
           </ul>
         </>
