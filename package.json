@@ -34,11 +34,13 @@
     "@stripe/stripe-js": "^9.12.0",
     "@supabase/ssr": "^0.12.3",
     "@supabase/supabase-js": "^2.110.8",
+    "@types/web-push": "^3.6.4",
     "next": "^16.2.12",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-hook-form": "^7.83.0",
     "stripe": "^22.3.2",
+    "web-push": "^3.6.7",
     "zod": "^4.4.3"
   },
   "devDependencies": {

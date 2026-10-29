@@ -30,7 +30,7 @@ export async function GET(_request:Request,{params}:{params:Promise<{token:strin
         const venue=venues.get(row.venue_id);
         const role=roles.get(row.role_id);
         const where=[venue?.name,place(venue?.address??null)].filter(Boolean).join(", ");
-        return {uid:`${row.id}@cliniq.team`,start:row.starts_at,end:row.ends_at,summary:`${venue?.name??"Werk"}${role?` · ${role}`:""}`,location:row.location_label||where||undefined,description:"Je dienst uit Cliniq Team. Wijzigingen komen hier vanzelf in.",cancelled:GONE.includes(row.status),sequence:row.revision??0,updated:row.updated_at??undefined};
+        return {uid:`${row.id}@cliniq.team`,start:row.starts_at,end:row.ends_at,summary:`${venue?.name??"Werk"}${role?` · ${role}`:""}`,location:row.location_label||where||undefined,description:"Je dienst uit Cliniq Team. Wijzigingen komen hier vanzelf in.",cancelled:GONE.includes(row.status),sequence:row.revision??0,updated:row.updated_at??undefined,alarmMinutes:120};
       });
     void feeds.update({last_fetched_at:new Date(now).toISOString()}).eq("token_hash",hashAvailabilityToken(token));
     const name=venues.size===1?`Rooster ${[...venues.values()][0].name}`:"Mijn rooster";

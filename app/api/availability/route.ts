@@ -7,6 +7,8 @@ import {assertSameOrigin,securityErrorResponse} from "../../../lib/http/security
 import {createSupabaseAdminClient} from "../../../lib/supabase/admin";
 import {sendTemplate} from "../../../lib/whatsapp/cloud";
 import {loadWhatsapp} from "../../../lib/whatsapp/store";
+import {pushToStaff} from "../../../lib/push/push";
+import type {SupabaseClient} from "@supabase/supabase-js";
 import {addDays,deadlineLabel,firstName,nightsLabel,zonedInstant} from "../../../lib/planning/nights";
 
 const schema=z.object({
@@ -71,6 +73,12 @@ export async function POST(request:Request){
     if(command.replayed)return NextResponse.json({message:"Dit beschikbaarheidsverzoek was al voorbereid.",requestId:command.request_id,replayed:true,links:{},shares:{},recipientIdsByStaff:{}});
     const {data:createdRecipients,error:createdRecipientsError}=await supabase.from("availability_request_recipients").select("id,staff_id").eq("organisation_id",input.organisationId).eq("request_id",command.request_id);if(createdRecipientsError)throw createdRecipientsError;
     const recipientIdsByStaff=Object.fromEntries((createdRecipients??[]).map(row=>[row.staff_id,row.id]));
+    // Phone notification for everyone who allowed it, whatever the WhatsApp setup.
+    const pushed=await (async()=>{try{
+      const people=staff as unknown as {id:string;preferred_language:string}[];
+      const deadlineText=deadlineLabel(new Date(input.deadlineAt).toISOString(),timezone);
+      return await pushToStaff(createSupabaseAdminClient() as unknown as SupabaseClient,input.organisationId,input.staffIds,(staffId)=>{const language=people.find(row=>row.id===staffId)?.preferred_language??"nl";return {title:language==="en"?"Can you work?":"Kun je werken?",body:language==="en"?`Can you work ${nightsText(language)}? Let us know before ${deadlineText}.`:`Kun je ${nightsText(language)}? Laat het weten vóór ${deadlineText}.`,url:links.get(staffId)??"/app/my-work",tag:`availability-${command.request_id}`};},origin);
+    }catch{return new Set<string>()}})();
     const config=input.deliver==="whatsapp"?await loadWhatsapp(input.organisationId):null;
     if(input.deliver==="whatsapp"&&!config)return NextResponse.json({message:"Links voorbereid. WhatsApp is nog niet gekoppeld, deel ze handmatig.",requestId:command.request_id,links:Object.fromEntries(links),shares,recipientIdsByStaff,deliveries:{}},{status:201});
     const deliveries:Record<string,{state:"sent"|"failed";detail:string}>={};
@@ -89,7 +97,7 @@ export async function POST(request:Request){
       }
     }
     const sentCount=Object.values(deliveries).filter(row=>row.state==="sent").length;
-    return NextResponse.json({message:config?`${sentCount} van ${recipients.length} verzoeken verstuurd via WhatsApp.`:`Beschikbaarheid voorbereid voor ${recipients.length} medewerker(s). Er is niets extern verstuurd.`,requestId:command.request_id,links:Object.fromEntries(links),shares,recipientIdsByStaff,deliveries},{status:201});
+    return NextResponse.json({message:config?`${sentCount} van ${recipients.length} verzoeken verstuurd via WhatsApp.`:`Beschikbaarheid voorbereid voor ${recipients.length} medewerker(s).${pushed.size?` ${pushed.size} kregen een melding op hun telefoon.`:" Er is niets extern verstuurd."}`,requestId:command.request_id,links:Object.fromEntries(links),shares,recipientIdsByStaff,deliveries,pushed:[...pushed]},{status:201});
   }catch(error){
     return securityErrorResponse(error)??NextResponse.json({errorCode:error instanceof z.ZodError?"VALIDATION_FAILED":"AVAILABILITY_REQUEST_FAILED"},{status:400});
   }

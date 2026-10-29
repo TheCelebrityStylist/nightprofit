@@ -1,6 +1,6 @@
 /**
  * Availability reminders: one WhatsApp nudge to people who have not answered, about 24 hours before the deadline.
- * Used by the hourly schedule (automatic) and by the planner's "remind now" button.
+ * Goes out as a phone notification and/or WhatsApp. Used by the hourly schedule and the planner's "remind now" button.
  * Every reminder gets a fresh personal link; the earlier link keeps working until the deadline.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -9,6 +9,7 @@ import { normalizeDutchPhone } from "./domain";
 import { sendTemplate } from "../whatsapp/cloud";
 import { loadWhatsapp } from "../whatsapp/store";
 import { deadlineLabel, firstName, nightsLabel } from "../planning/nights";
+import { pushToStaff } from "../push/push";
 
 const HOUR = 3600_000;
 /** Statuses where someone has not answered anything yet. */
@@ -58,9 +59,12 @@ export async function sendReminders(
 
   for (const period of periods) {
     const config = await loadWhatsapp(period.organisation_id);
-    if (options.mode === "auto" && !config) continue; // nothing can go out automatically without WhatsApp
+    const { data: subscriptionRows } = await db.from("push_subscriptions").select("staff_id").eq("organisation_id", period.organisation_id);
+    const subscribed = new Set(((subscriptionRows ?? []) as { staff_id: string }[]).map((row) => row.staff_id));
+    // Nothing can go out automatically without WhatsApp or a phone that allows notifications.
+    if (options.mode === "auto" && !config && !subscribed.size) continue;
     const { data: recipientRows } = await db.from("availability_request_recipients").select("id,staff_id,status,reminder_count,reminded_at").eq("organisation_id", period.organisation_id).eq("request_id", period.id);
-    const due = ((recipientRows ?? []) as Recipient[]).filter((row) => remindable(row, options.mode, now));
+    const due = ((recipientRows ?? []) as Recipient[]).filter((row) => remindable(row, options.mode, now) && (options.mode === "manual" || Boolean(config) || subscribed.has(row.staff_id)));
     if (!due.length) continue;
     const [{ data: staffRows }, { data: venueRow }] = await Promise.all([
       db.from("staff_profiles").select("id,full_name,preferred_language,contact_phone,employment_status").eq("organisation_id", period.organisation_id).in("id", due.map((row) => row.staff_id)),
@@ -76,33 +80,50 @@ export async function sendReminders(
       const language = person.preferred_language === "en" ? "en" : "nl";
       let phone: string | null = null;
       try { phone = person.contact_phone ? normalizeDutchPhone(person.contact_phone) : null; } catch { phone = null; }
-      if (!phone) { outcomes.push({ requestId: period.id, staffId: person.id, name, state: "skipped", detail: "Geen geldig telefoonnummer." }); continue; }
+      const canPush = subscribed.has(person.id);
+      const canWhatsapp = Boolean(config && phone);
+      if (!phone && !canPush) { outcomes.push({ requestId: period.id, staffId: person.id, name, state: "skipped", detail: "Geen telefoonnummer en geen meldingen aan." }); continue; }
+      if (options.mode === "auto" && !canWhatsapp && !canPush) continue;
 
       // The attempt row is the lock: the same reminder number can only be claimed once, even if two runs overlap.
       const attempt = recipient.reminder_count + 1;
-      const channel = config ? "whatsapp_provider" : "manual_whatsapp";
-      const { error: claimError } = await db.from("availability_message_attempts").insert({ organisation_id: period.organisation_id, venue_id: period.venue_id, recipient_id: recipient.id, attempt_type: "reminder", channel, idempotency_key: `reminder:${recipient.id}:${attempt}`, state: "prepared", attempted_by: options.actorId ?? null });
+      const claim = `reminder:${recipient.id}:${attempt}`;
+      const channel = canWhatsapp ? "whatsapp_provider" : canPush ? "push" : "manual_whatsapp";
+      const { error: claimError } = await db.from("availability_message_attempts").insert({ organisation_id: period.organisation_id, venue_id: period.venue_id, recipient_id: recipient.id, attempt_type: "reminder", channel, idempotency_key: claim, state: "prepared", attempted_by: options.actorId ?? null });
       if (claimError) { outcomes.push({ requestId: period.id, staffId: person.id, name, state: "skipped", detail: "Al herinnerd." }); continue; }
+      const settle = (values: Record<string, unknown>) => db.from("availability_message_attempts").update(values).eq("organisation_id", period.organisation_id).eq("idempotency_key", claim);
 
       const token = createAvailabilityToken();
       const { error: tokenError } = await db.from("secure_response_tokens").insert({ organisation_id: period.organisation_id, recipient_id: recipient.id, token_hash: hashAvailabilityToken(token), purpose: "availability", expires_at: period.deadline_at });
-      if (tokenError) { outcomes.push({ requestId: period.id, staffId: person.id, name, state: "failed", detail: "Link maken lukte niet." }); continue; }
+      if (tokenError) { await settle({ state: "failed", failure_explanation: "token" }); outcomes.push({ requestId: period.id, staffId: person.id, name, state: "failed", detail: "Link maken lukte niet." }); continue; }
       const url = `${options.origin}/availability/${token}`;
       const nights = period.requested_dates?.length ? nightsLabel(period.requested_dates, language) : `${new Date(period.starts_at).toLocaleDateString("nl-NL", { day: "numeric", month: "short", timeZone: timezone })} t/m ${new Date(period.ends_at).toLocaleDateString("nl-NL", { day: "numeric", month: "short", timeZone: timezone })}`;
       const deadline = deadlineLabel(period.deadline_at, timezone, language);
 
-      let outcome: ReminderOutcome;
-      if (config) {
+      const pushed = canPush
+        ? (await pushToStaff(db, period.organisation_id, [person.id], { title: language === "en" ? "Quick reminder" : "Nog even", body: language === "en" ? `Can you work ${nights}? Let us know before ${deadline}.` : `Kun je ${nights}? Laat het weten vóór ${deadline}.`, url, tag: `availability-${period.id}` }, options.origin)).has(person.id)
+        : false;
+      let sentBy = pushed ? "melding" : "";
+      let failure = "";
+      if (canWhatsapp && config && phone) {
         // Same approved template as the first request; its text works as a reminder too.
         const result = await sendTemplate(config, phone, "availability", [name, nights, deadline, url]);
-        outcome = result.ok ? { staffId: person.id, name, state: "sent", detail: "Herinnering verstuurd." } : { staffId: person.id, name, state: "failed", detail: result.detail };
-        await db.from("availability_message_attempts").update({ state: result.ok ? "provider_accepted" : "failed", provider: "whatsapp_cloud", provider_message_id: result.ok ? result.messageId : null, failure_explanation: result.ok ? null : result.detail }).eq("organisation_id", period.organisation_id).eq("idempotency_key", `reminder:${recipient.id}:${attempt}`);
         await db.from("notification_outbox").insert({ organisation_id: period.organisation_id, venue_id: period.venue_id, channel: "whatsapp", destination_e164: phone, correlation_type: "availability_reminder", correlation_id: recipient.id, payload: { template: config.templates.availability, request_id: period.id, attempt }, state: result.ok ? "sent" : "failed", provider_message_id: result.ok ? result.messageId : null, failure_reason: result.ok ? null : result.detail });
-        if (!result.ok) { outcomes.push({ requestId: period.id, ...outcome }); continue; }
-      } else {
+        if (result.ok) { sentBy = sentBy ? "WhatsApp en melding" : "WhatsApp"; await settle({ state: "provider_accepted", provider: "whatsapp_cloud", provider_message_id: result.messageId }); }
+        else failure = result.detail;
+      }
+      let outcome: ReminderOutcome;
+      if (sentBy) {
+        if (!canWhatsapp || failure) await settle({ state: "provider_accepted", provider: "web_push" });
+        outcome = { staffId: person.id, name, state: "sent", detail: `Herinnerd via ${sentBy}.` };
+      } else if (options.mode === "manual" && phone) {
         const text = reminderMessage(language, name, nights, deadline, url);
+        await settle({ state: "manually_shared", channel: "manual_whatsapp" });
         outcome = { staffId: person.id, name, state: "manual", detail: "Klaar om te versturen.", whatsappUrl: `https://wa.me/${phone.slice(1)}?text=${encodeURIComponent(text)}` };
-        await db.from("availability_message_attempts").update({ state: "manually_shared" }).eq("organisation_id", period.organisation_id).eq("idempotency_key", `reminder:${recipient.id}:${attempt}`);
+      } else {
+        await settle({ state: "failed", failure_explanation: failure || "Melding kwam niet aan." });
+        outcomes.push({ requestId: period.id, staffId: person.id, name, state: "failed", detail: failure || "Melding kwam niet aan." });
+        continue;
       }
       await db.from("availability_request_recipients").update({ reminded_at: new Date(now).toISOString(), reminder_count: attempt }).eq("organisation_id", period.organisation_id).eq("id", recipient.id);
       outcomes.push({ requestId: period.id, ...outcome });
