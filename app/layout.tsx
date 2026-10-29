@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono, Instrument_Serif, MuseoModerno } from "next/font/google";
 import "./globals.css";
 import "./cliniq-theme.css";
@@ -12,7 +12,12 @@ export const metadata: Metadata = {
   title: { default: "Cliniq Team", template: "%s · Cliniq Team" },
   description: "Rooster, beschikbaarheid en diensten voor het team van Cliniq.",
   robots: { index: false, follow: false },
+  manifest: "/manifest.webmanifest",
+  icons: { icon: "/icon-192.png", apple: "/apple-touch-icon.png" },
+  appleWebApp: { capable: true, title: "Cliniq", statusBarStyle: "black-translucent" },
 };
+
+export const viewport: Viewport = { themeColor: "#31071B" };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return <html lang="nl"><body className={`${geistSans.variable} ${geistMono.variable} ${cliniqDisplay.variable} ${cliniqSerif.variable}`}>{children}</body></html>;

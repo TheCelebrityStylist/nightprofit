@@ -7,7 +7,9 @@ import {normalizeDutchPhone} from "../../../lib/workforce/domain";
 import {createStaffOnboardingToken,hashStaffOnboardingToken,onboardingMessage} from "../../../lib/workforce/onboarding";
 import {sendTemplate} from "../../../lib/whatsapp/cloud";
 import {loadWhatsapp} from "../../../lib/whatsapp/store";
-import {addDays,firstName,zonedInstant} from "../../../lib/planning/nights";
+import {addDays,firstName,isoWeekNumber,zonedInstant} from "../../../lib/planning/nights";
+import {announceRoster} from "../../../lib/push/notify";
+import type {SupabaseClient} from "@supabase/supabase-js";
 
 const base={organisationId:z.string().uuid(),venueId:z.string().uuid()};
 const schema=z.discriminatedUnion("action",[
@@ -58,7 +60,8 @@ export async function POST(request:Request){
       if(!drafts?.length)return NextResponse.json({published:false,message:"Er staan geen wijzigingen klaar."});
       const {data,error}=await rpc("publish_roster_v2",{target_organisation_id:input.organisationId,target_venue_id:input.venueId,target_window_start:windowStart,target_window_end:windowEnd,target_expected_revision:(drafts[0] as {revision:number}).revision,target_idempotency_key:crypto.randomUUID(),target_acknowledged_exceptions:[]});
       if(error)return failure(dbCode(error)||"PUBLISH_FAILED");
-      return NextResponse.json({published:true,version:(data as {version?:number})?.version??null,weekStart:windowStart});
+      const notified=await announceRoster(createSupabaseAdminClient() as unknown as SupabaseClient,input.organisationId,input.venueId,windowStart,windowEnd,isoWeekNumber(input.weekStart),new URL(request.url).origin).catch(()=>0);
+      return NextResponse.json({published:true,version:(data as {version?:number})?.version??null,weekStart:windowStart,notified});
     }
 
     if(input.action==="set_contract"){

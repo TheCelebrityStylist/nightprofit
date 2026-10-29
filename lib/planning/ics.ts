@@ -1,5 +1,5 @@
 /** Minimal iCalendar (RFC 5545) writer for a personal shift feed. */
-export type CalendarEvent = { uid: string; start: string; end: string; summary: string; location?: string; description?: string; cancelled?: boolean; sequence?: number; updated?: string };
+export type CalendarEvent = { uid: string; start: string; end: string; summary: string; location?: string; description?: string; cancelled?: boolean; sequence?: number; updated?: string; alarmMinutes?: number };
 
 const stamp = (iso: string) => new Date(iso).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
 export const escapeText = (value: string) => value.replace(/\\/g, "\\\\").replace(/;/g, "\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
@@ -38,6 +38,7 @@ export function buildCalendar(name: string, events: CalendarEvent[], now = new D
       `SEQUENCE:${event.sequence ?? 0}`,
       `STATUS:${event.cancelled ? "CANCELLED" : "CONFIRMED"}`,
       "TRANSP:OPAQUE",
+      ...(event.alarmMinutes && !event.cancelled ? ["BEGIN:VALARM", "ACTION:DISPLAY", `DESCRIPTION:${escapeText(event.summary)}`, `TRIGGER:-PT${Math.round(event.alarmMinutes)}M`, "END:VALARM"] : []),
       "END:VEVENT",
     );
   }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { addDays, deadlineLabel, mondayOf, nightOf, nightsLabel } from "../lib/planning/nights";
 
 type Colleague = { name: string; role_name: string; starts_at: string; ends_at: string };
@@ -136,6 +136,7 @@ export function MyRoster({
         )}
       </section>
 
+      <PhoneNotifications organisationId={organisationId} locale={locale} />
       <CalendarLink organisationId={organisationId} locale={locale} />
     </div>
   );
@@ -175,6 +176,98 @@ function CalendarLink({ organisationId, locale }: { organisationId: string; loca
             <button type="button" onClick={() => { void navigator.clipboard.writeText(links.https).then(() => setState("copied")); }}>{state === "copied" ? tx("Gekopieerd", "Copied") : tx("Kopieer link (Outlook en andere)", "Copy link (Outlook and others)")}</button>
           </div>
           <p className="me-cal-note">{tx("Deze link is persoonlijk: deel hem niet. Een nieuwe koppeling maken zet de oude link stop. Google ververst ongeveer elke paar uur, Apple elk uur.", "This link is personal: don't share it. Connecting again stops the old link. Google refreshes every few hours, Apple every hour.")}</p>
+        </>
+      )}
+    </section>
+  );
+}
+
+// ---------- notifications on this phone ----------
+type PushState = "checking" | "unsupported" | "install" | "off" | "on" | "blocked" | "busy" | "error";
+const base64ToBytes = (value: string) => { const padded = (value + "=".repeat((4 - (value.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/"); return Uint8Array.from(atob(padded), (char) => char.charCodeAt(0)); };
+function detectPush(): PushState {
+  if (typeof window === "undefined") return "checking";
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+  const standalone = window.matchMedia("(display-mode: standalone)").matches || (navigator as Navigator & { standalone?: boolean }).standalone === true;
+  if (ios && !standalone) return "install";
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return "unsupported";
+  return Notification.permission === "denied" ? "blocked" : "off";
+}
+
+function PhoneNotifications({ organisationId, locale }: { organisationId: string; locale: "nl" | "en" }) {
+  const tx = (nl: string, en: string) => (locale === "nl" ? nl : en);
+  const [state, setState] = useState<PushState>("checking");
+  const [note, setNote] = useState("");
+  useEffect(() => {
+    const initial = detectPush();
+    if (initial !== "off") { queueMicrotask(() => setState(initial)); return; }
+    void navigator.serviceWorker.getRegistration("/").then(async (registration) => {
+      const subscription = registration ? await registration.pushManager.getSubscription() : null;
+      setState(subscription && Notification.permission === "granted" ? "on" : "off");
+    }).catch(() => setState("off"));
+  }, []);
+
+  async function enable() {
+    setState("busy"); setNote("");
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") { setState(permission === "denied" ? "blocked" : "off"); return; }
+      const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      await navigator.serviceWorker.ready;
+      const keyResponse = await fetch("/api/push/key");
+      const { publicKey } = (await keyResponse.json()) as { publicKey?: string };
+      if (!publicKey) throw new Error();
+      const subscription = (await registration.pushManager.getSubscription()) ?? (await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: base64ToBytes(publicKey) }));
+      const json = subscription.toJSON() as { endpoint?: string; keys?: { p256dh?: string; auth?: string } };
+      const saved = await fetch("/api/push/subscribe", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ organisationId, endpoint: json.endpoint, keys: json.keys }) });
+      if (!saved.ok) throw new Error();
+      setState("on");
+      setNote(tx("Je krijgt nu een testmelding.", "You'll get a test notification now."));
+      await fetch("/api/push/test", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ organisationId }) });
+    } catch { setState("error"); }
+  }
+
+  async function disable() {
+    setState("busy");
+    try {
+      const registration = await navigator.serviceWorker.getRegistration("/");
+      const subscription = registration ? await registration.pushManager.getSubscription() : null;
+      if (subscription) {
+        await fetch("/api/push/subscribe", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ organisationId, endpoint: subscription.endpoint }) });
+        await subscription.unsubscribe();
+      }
+      setState("off"); setNote("");
+    } catch { setState("error"); }
+  }
+
+  if (state === "checking") return null;
+  return (
+    <section className="me-cal" aria-labelledby="me-push-title">
+      <h2 id="me-push-title">{tx("Meldingen op je telefoon", "Notifications on your phone")}</h2>
+      {state === "install" ? (
+        <>
+          <p>{tx("Op een iPhone werkt dit als je Cliniq Team op je beginscherm zet:", "On an iPhone this works once Cliniq Team is on your home screen:")}</p>
+          <ol className="me-steps">
+            <li>{tx("Tik onderin Safari op Deel", "Tap Share at the bottom of Safari")} <span aria-hidden>⬆︎</span></li>
+            <li>{tx("Kies \"Zet op beginscherm\"", "Choose \"Add to Home Screen\"")}</li>
+            <li>{tx("Open Cliniq Team vanaf je beginscherm en zet hier meldingen aan", "Open Cliniq Team from your home screen and turn notifications on here")}</li>
+          </ol>
+        </>
+      ) : state === "unsupported" ? (
+        <p>{tx("Deze browser ondersteunt geen meldingen. Gebruik Chrome op Android, of zet de app op je iPhone-beginscherm.", "This browser can't show notifications. Use Chrome on Android, or add the app to your iPhone home screen.")}</p>
+      ) : state === "blocked" ? (
+        <p>{tx("Meldingen zijn geblokkeerd voor deze site. Zet ze aan in de instellingen van je browser of telefoon en kom dan terug.", "Notifications are blocked for this site. Allow them in your browser or phone settings, then come back.")}</p>
+      ) : state === "on" ? (
+        <>
+          <p>{tx("Aan. Je krijgt een melding als je planner vraagt wanneer je kunt, als je rooster klaarstaat en twee uur voor je dienst.", "On. You'll be notified when your planner asks when you can work, when your roster is ready, and two hours before your shift.")}</p>
+          {note ? <p className="me-saved" role="status">{note}</p> : null}
+          <div className="me-cal-options"><button type="button" onClick={() => void disable()}>{tx("Zet meldingen uit op deze telefoon", "Turn off on this phone")}</button></div>
+        </>
+      ) : (
+        <>
+          <p>{tx("Krijg een melding als je planner vraagt wanneer je kunt, als je rooster klaarstaat en twee uur voor je dienst.", "Get notified when your planner asks when you can work, when your roster is ready, and two hours before your shift.")}</p>
+          <button type="button" className="me-cal-go" disabled={state === "busy"} onClick={() => void enable()}>{state === "busy" ? tx("Bezig…", "Working…") : tx("Zet meldingen aan", "Turn on notifications")}</button>
+          {state === "error" ? <p className="me-error" role="alert">{tx("Dat lukte niet. Probeer het opnieuw.", "That didn't work. Try again.")}</p> : null}
         </>
       )}
     </section>
